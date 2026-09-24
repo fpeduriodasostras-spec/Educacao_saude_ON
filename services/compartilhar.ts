@@ -165,7 +165,30 @@ export type ResultadoShare =
   | 'compartilhado'        // texto + TODAS as fotos
   | 'compartilhado-parcial' // texto + parte das fotos (o aparelho não aceitou todas)
   | 'compartilhado-sem-fotos' // só o texto — as fotos NÃO foram
-  | 'copiado' | 'cancelado' | 'erro';
+  | 'copiado' | 'cancelado'
+  | 'erro-copiado'         // a folha foi recusada, MAS a legenda está na área de transferência
+  | 'erro';                // a folha foi recusada E a cópia falhou — NADA ficou no aparelho
+
+// v110 — cópia COM PROVA: só devolve true se o navegador CONFIRMOU a escrita.
+// Depois de uma folha de compartilhamento recusada, o Chrome costuma negar
+// também o clipboard ("document is not focused") — e até a v109 esse erro era
+// engolido e a tela dizia "a legenda está copiada" com a área de transferência
+// intacta: o operador colava no grupo o que estivesse lá de antes (caso do
+// Leony, 24/09). O plano B (textarea + execCommand) salva parte dos casos em
+// que o writeText moderno é negado.
+export const copiarLegenda = async (txt: string): Promise<boolean> => {
+  try { await navigator.clipboard.writeText(txt); return true; } catch { /* tenta o plano B */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = txt;
+    ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch { return false; }
+};
 
 // O MÁXIMO que ESTE aparelho aceita numa folha de compartilhamento.
 //
@@ -236,12 +259,13 @@ export const enviarOS = async (
         await nav.share({ text: txt, files: lote });        // <<< primeira coisa
         // só depois de a folha ter aberto: a legenda na área de transferência,
         // para o caso de o aparelho engolir o texto
-        try { await nav.clipboard?.writeText(txt); } catch { /* sem permissão: segue */ }
+        copiarLegenda(txt);   // backup silencioso: se falhar, o envio já foi
         return faltam > 0 ? 'compartilhado-parcial' : 'compartilhado';
       } catch (e: any) {
         if (e?.name === 'AbortError') return 'cancelado';   // usuário fechou a folha
-        try { await nav.clipboard?.writeText(txt); } catch { /* segue */ }
-        return 'erro';   // recusou: NÃO abre uma segunda folha
+        // recusou: NÃO abre uma segunda folha. E o retorno DIZ se a legenda
+        // ficou copiada de verdade — 'erro' seco significa que NADA ficou.
+        return (await copiarLegenda(txt)) ? 'erro-copiado' : 'erro';
       }
     }
   }
@@ -251,7 +275,7 @@ export const enviarOS = async (
   if (nav.share) {
     try {
       await nav.share({ text: texto });
-      try { await nav.clipboard?.writeText(texto); } catch { /* segue */ }
+      copiarLegenda(texto);   // backup silencioso
       return totalUrls > 0 ? 'compartilhado-sem-fotos' : 'compartilhado';
     } catch (e: any) {
       if (e?.name === 'AbortError') return 'cancelado';
@@ -259,12 +283,8 @@ export const enviarOS = async (
   }
 
   // desktop: copia a legenda (as fotos o gestor pega no app/relatório)
-  try {
-    await navigator.clipboard.writeText(texto);
-    return 'copiado';
-  } catch {
-    try { window.prompt('Copie a legenda:', texto); return 'copiado'; } catch { return 'erro'; }
-  }
+  if (await copiarLegenda(texto)) return 'copiado';
+  try { window.prompt('Copie a legenda:', texto); return 'copiado'; } catch { return 'erro'; }
 };
 
 // Compartilha no grupo: no celular abre a folha nativa (WhatsApp, e-mail…)

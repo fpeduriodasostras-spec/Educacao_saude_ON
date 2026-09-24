@@ -22,6 +22,12 @@ método AIOS: erro numerado nunca volta.
 - **#6 FileList esvazia antes do setState.** `e.target.value = ''` limpa o
   FileList vivo; o updater roda depois e perde a seleção. Snapshot
   (`Array.from`) ANTES do setState (v37, achado da auditoria externa).
+- **#23 "Está copiada" sem confirmar é mentira.** Depois de uma folha de
+  compartilhamento recusada, o navegador costuma negar TAMBÉM o clipboard
+  ("document is not focused"). Engolir o catch e afirmar a cópia fez o campo
+  colar no grupo o conteúdo ANTIGO da área de transferência (caso Leony,
+  24/09). Cópia sempre com prova: `copiarLegenda` devolve boolean (v110);
+  falhou → botão COPIAR LEGENDA / prompt, porque toque novo = permissão nova.
 
 ## Supabase / dados
 

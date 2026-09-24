@@ -197,10 +197,11 @@ const ListaOS: React.FC<Props> = ({ lista, aoEditar, aoMudar, filtroMinhas, rotu
 
     // 2º toque: já está preparada — ENVIA AGORA, sem nenhum await antes
     if (prontoId === os.id && fotosProntas.current) {
+      const leg = legendaOS(os, medDoMes());
       emShare.current = true;
       try {
-        avisar(await enviarOS(legendaOS(os, medDoMes()), fotosProntas.current, os.foto_urls?.length || 0));
-      } catch { avisar('erro'); }
+        avisar(await enviarOS(leg, fotosProntas.current, os.foto_urls?.length || 0), leg);
+      } catch { avisar('erro', leg); }
       finally { emShare.current = false; fotosProntas.current = null; setProntoId(null); }
       return;
     }
@@ -208,10 +209,11 @@ const ListaOS: React.FC<Props> = ({ lista, aoEditar, aoMudar, filtroMinhas, rotu
     const n = os.foto_urls?.length || 0;
     // O.S. sem foto: nada a preparar, o toque já vale
     if (!n) {
+      const leg = legendaOS(os, medDoMes());
       emShare.current = true;
       setCompartilhandoId(os.id ?? null);
-      try { avisar(await compartilharOS(os, medDoMes())); }
-      catch { avisar('erro'); }
+      try { avisar(await compartilharOS(os, medDoMes()), leg); }
+      catch { avisar('erro', leg); }
       finally { emShare.current = false; setCompartilhandoId(null); }
       return;
     }
@@ -237,10 +239,22 @@ const ListaOS: React.FC<Props> = ({ lista, aoEditar, aoMudar, filtroMinhas, rotu
     }
   };
 
-  const avisar = (r: string) => {
+  const avisar = (r: string, legenda: string) => {
     setProgShare('');
     if (r === 'copiado') alert('📋 Legenda copiada — cole no grupo e anexe as fotos.');
-    if (r === 'erro') alert('❌ NADA foi enviado — o aparelho recusou o compartilhamento.\n\nA legenda ficou copiada: cole no grupo e mande as fotos pela galeria.');
+    // v110: "ficou copiada" SÓ quando a cópia foi CONFIRMADA pelo navegador.
+    // Quando a folha é recusada, o clipboard costuma ser negado junto — até a
+    // v109 a falha era engolida e o operador colava no grupo o que estivesse
+    // na área de transferência de antes (caso do Leony, 24/09). No 'erro'
+    // seco, o prompt MOSTRA a legenda para copiar à mão: nada de colar vazio.
+    if (r === 'erro-copiado') alert('❌ NADA foi enviado — o aparelho recusou o compartilhamento.\n\nA legenda ficou copiada: cole no grupo e mande as fotos pela galeria.');
+    if (r === 'erro') {
+      try {
+        window.prompt('❌ NADA foi enviado e a cópia automática falhou.\n\nCopie a legenda abaixo (segure e selecione tudo) e cole no grupo — as fotos vão pela galeria:', legenda);
+      } catch {
+        alert('❌ NADA foi enviado — o aparelho recusou o compartilhamento e a legenda NÃO foi copiada. Tente de novo.');
+      }
+    }
     // v92: avisar quando a foto NÃO foi junto. Antes isso passava calado e o
     // grupo recebia o texto sem imagem nenhuma, sem ninguém perceber.
     // v103: agora cobre também o caso de as fotos não terem BAIXADO do

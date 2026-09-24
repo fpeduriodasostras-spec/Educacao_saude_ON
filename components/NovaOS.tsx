@@ -7,7 +7,7 @@ import { KIT_EMERGENCIAL } from '../data/materiais';
 import { guiaMedida } from '../data/areas';
 import { VOZ_ATIVA, GESTORES, EQUIPES, CORRETIVA, DOIS_CONTRATOS, medDoMes, hojeLocal } from '../config';
 import { osService } from '../services/osService';
-import { compartilharOS, prepararFotos, enviarOS, legendaOS } from '../services/compartilhar';
+import { compartilharOS, prepararFotos, enviarOS, legendaOS, copiarLegenda } from '../services/compartilhar';
 import { deepLinkPrefill, consomeDeepLink } from '../services/deepLink';
 
 const normaliza = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, '');
@@ -83,6 +83,10 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
   const [salvaFoiEdicao, setSalvaFoiEdicao] = useState(false);
   const [compartilhando, setCompartilhando] = useState(false); // v87: anti duplo-toque no share
   const emShare = useRef(false);   // v106: a trava de verdade — o estado chega tarde demais
+  // v110: quando o aparelho recusa a folha E a cópia automática falha, a
+  // legenda fica aqui esperando um TOQUE NOVO no botão "copiar legenda" —
+  // toque novo = permissão nova do navegador, e a cópia sai de verdade.
+  const [legendaPendente, setLegendaPendente] = useState<string | null>(null);
   // v87: contrato escolhido decide a lista de unidades e de locais
   const ehSaude = (os.contrato || '') === 'Saúde';
   const [ouvindo, setOuvindo] = useState(false);
@@ -215,7 +219,7 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
     return novo;
   });
 
-  const limpar = () => { try { localStorage.removeItem(chaveRascunho); } catch { /* ok */ } setRascunho(null); setOs(vaziaPara(usuario)); setFotos([]); setKit({}); setKitAberto(false); setMsg(''); setUltimaSalva(null); setMsgShare(''); setAvisoLink(''); aoCancelarEdicao(); };
+  const limpar = () => { try { localStorage.removeItem(chaveRascunho); } catch { /* ok */ } setRascunho(null); setOs(vaziaPara(usuario)); setFotos([]); setKit({}); setKitAberto(false); setMsg(''); setUltimaSalva(null); setMsgShare(''); setLegendaPendente(null); setAvisoLink(''); aoCancelarEdicao(); };
 
   const mudaKit = (descricao: string, delta: number) =>
     setKit(prev => {
@@ -406,6 +410,7 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
     setSalvaFoiEdicao(!!os.id);
     setAvisoLink('');
     setUltimaSalva({ ...(salva || dados), foto_urls: urls } as OSCampo);
+    setLegendaPendente(null);   // v110: pendência de cópia era da O.S. anterior
     try { localStorage.removeItem(chaveRascunho); } catch { /* ok */ }
     setRascunho(null);
     setOs(vaziaPara(usuario));
@@ -776,6 +781,7 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
               if (emShare.current) return;
               emShare.current = true;
               setCompartilhando(true);
+              setLegendaPendente(null);   // v110: tentativa nova zera a pendência
               const n = ultimaSalva.foto_urls?.length || 0;
               // try/finally OBRIGATORIO: sem ele, uma exceção aqui deixaria o
               // ref travado em true e o botão morto até a tela ser remontada —
@@ -819,11 +825,18 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
                 // Antes o segundo caso mentia "✔ enviado com todas as fotos".
                 r === 'compartilhado-sem-fotos' ? '⚠️ SÓ O TEXTO foi — NENHUMA foto chegou no grupo. Ou as fotos não baixaram (sinal), ou este aparelho não aceita anexo. Mande as fotos pela galeria, no mesmo grupo.' :
                 r === 'copiado' ? '📋 legenda copiada — cole no grupo e anexe as fotos' :
-                r === 'cancelado' ? '' : '❌ NADA foi enviado — o aparelho recusou o compartilhamento. A legenda está copiada: cole no grupo e mande as fotos pela galeria.'
+                // v110: "está copiada" SÓ quando a cópia foi confirmada. O caso
+                // do Leony (24/09): a folha era recusada, a cópia falhava calada
+                // e a tela mandava colar — colava-se o que estivesse na área de
+                // transferência de antes. Agora o 'erro' seco ganha um botão
+                // "copiar legenda" logo abaixo (toque novo = cópia aceita).
+                r === 'erro-copiado' ? '❌ NADA foi enviado — o aparelho recusou o compartilhamento. A legenda está copiada: cole no grupo e mande as fotos pela galeria.' :
+                r === 'cancelado' ? '' : '❌ NADA foi enviado — o aparelho recusou o compartilhamento e a legenda NÃO foi copiada. Toque em COPIAR LEGENDA abaixo, cole no grupo e mande as fotos pela galeria.'
               );
+              if (r === 'erro') setLegendaPendente(legendaOS(ultimaSalva, medDoMes()));
               // só some sozinho quando foi tudo; se faltou foto, o aviso fica
               // na tela até ele fechar (v103: O.S. vazia também segura o aviso)
-              if (r === 'compartilhado' && n > 0) setTimeout(() => { setUltimaSalva(null); setMsgShare(''); }, 1200);
+              if (r === 'compartilhado' && n > 0) setTimeout(() => { setUltimaSalva(null); setMsgShare(''); setLegendaPendente(null); }, 1200);
             }} className="flex-1 bg-fpv-600 active:bg-fpv-700 disabled:bg-stone-300 text-white font-bold py-2.5 rounded-xl text-sm flex items-center justify-center gap-2">
               {compartilhando
                 ? <><Loader2 size={15} className="animate-spin" /> enviando…</>
@@ -835,10 +848,26 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
                       ? '📤 Enviar só a legenda (as fotos não baixaram)'
                       : '📤 Compartilhar no grupo'}
             </button>
-            <button type="button" onClick={() => { setUltimaSalva(null); setMsgShare(''); }}
+            <button type="button" onClick={() => { setUltimaSalva(null); setMsgShare(''); setLegendaPendente(null); }}
               className="px-4 border border-stone-300 rounded-xl text-sm font-bold text-stone-600">agora não</button>
           </div>
           {msgShare && <p className="text-[11px] text-stone-500">{msgShare}</p>}
+          {/* v110: a cópia automática falhou — este botão é um toque NOVO, e
+              com toque novo o navegador aceita escrever na área de
+              transferência. Se nem assim for, o prompt mostra a legenda para
+              copiar à mão. Nunca mais "está copiada" sem estar. */}
+          {legendaPendente && (
+            <button type="button" onClick={async () => {
+              if (await copiarLegenda(legendaPendente)) {
+                setLegendaPendente(null);
+                setMsgShare('📋 legenda copiada — cole no grupo e mande as fotos pela galeria');
+              } else {
+                window.prompt('Copie a legenda (segure e selecione tudo):', legendaPendente);
+              }
+            }} className="w-full bg-amber-500 active:bg-amber-600 text-white font-bold py-2.5 rounded-xl text-sm">
+              📋 COPIAR LEGENDA
+            </button>
+          )}
         </div>
       )}
 

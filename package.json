@@ -1,7 +1,7 @@
 {
   "name": "fpv-campo",
   "private": true,
-  "version": "109.0.0",
+  "version": "110.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
