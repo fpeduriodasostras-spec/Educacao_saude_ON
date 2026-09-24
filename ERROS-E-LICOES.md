@@ -36,6 +36,14 @@ método AIOS: erro numerado nunca volta.
   `navegadorEmbutido()` avisa na chegada e no envio ("salve aqui, compartilhe
   pela LISTA no app de verdade"), e toda recusa de share agora escreve o
   motivo técnico na mensagem — o print do campo virou o diagnóstico.
+- **#25 Instrução que aponta pra onde o usuário NÃO enxerga é beco sem
+  saída.** "Ache-a na LISTA e complete pelo lápis" — mas o campo restrito vê
+  SÓ as próprias O.S.: a O.S. registrada por outro colega é INVISÍVEL pra
+  ele (caso Abraão, 24/09 — 10 minutos de digitação perdidos e a mensagem
+  apontando escola "errada"). Bloqueio de duplicata agora traz o botão
+  ABRIR (v112): carrega a O.S. existente no formulário, aproveitando o que
+  já foi digitado (campos vazios recebem o texto; nada do colega é
+  sobrescrito; fotos anexadas/subidas vão junto).
 
 ## Supabase / dados
 

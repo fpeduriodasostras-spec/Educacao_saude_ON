@@ -87,6 +87,11 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
   // legenda fica aqui esperando um TOQUE NOVO no botão "copiar legenda" —
   // toque novo = permissão nova do navegador, e a cópia sai de verdade.
   const [legendaPendente, setLegendaPendente] = useState<string | null>(null);
+  // v112: a O.S. que JÁ EXISTE com o número digitado/do link — vira o botão
+  // "ABRIR pra completar", que aproveita o que a pessoa digitou. Caso Abraão
+  // (24/09): 10 min de digitação perdidos porque a saída era "ache na LISTA"
+  // — e a lista do campo restrito nem mostra a O.S. dos outros.
+  const [osExistente, setOsExistente] = useState<OSCampo | null>(null);
   // v87: contrato escolhido decide a lista de unidades e de locais
   const ehSaude = (os.contrato || '') === 'Saúde';
   const [ouvindo, setOuvindo] = useState(false);
@@ -125,7 +130,10 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
     (async () => {
       if (!p.numero) return;
       const existe = await osService.numeroExiste(Number(p.numero));
-      if (existe) setAvisoLink(`⛔ A O.S. ${p.numero} JÁ FOI REGISTRADA (${existe.unidade} · ${existe.status}) — outro colega chegou primeiro. Ache-a na LISTA e complete pelo lápis. NÃO registre de novo.`);
+      // v112: NÃO mandar "achar na LISTA" — o campo restrito só vê as
+      // PRÓPRIAS O.S., e a de outro colega é invisível pra ele (beco sem
+      // saída do Abraão, 24/09). O botão ABRIR leva direto pra O.S.
+      if (existe) { setOsExistente(existe); setAvisoLink(`⛔ A O.S. ${p.numero} JÁ FOI REGISTRADA (${existe.unidade} · ${existe.status}) — outro colega chegou primeiro. NÃO registre de novo: toque no botão azul pra ABRIR e completar.`); }
       else setAvisoLink(`📥 O.S. ${p.numero} recebida do fiscal — confira os dados, registre a execução e mande pro grupo.`);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -219,7 +227,40 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
     return novo;
   });
 
-  const limpar = () => { try { localStorage.removeItem(chaveRascunho); } catch { /* ok */ } setRascunho(null); setOs(vaziaPara(usuario)); setFotos([]); setKit({}); setKitAberto(false); setMsg(''); setUltimaSalva(null); setMsgShare(''); setLegendaPendente(null); setAvisoLink(''); aoCancelarEdicao(); };
+  const limpar = () => { try { localStorage.removeItem(chaveRascunho); } catch { /* ok */ } setRascunho(null); setOs(vaziaPara(usuario)); setFotos([]); setKit({}); setKitAberto(false); setMsg(''); setUltimaSalva(null); setMsgShare(''); setLegendaPendente(null); setOsExistente(null); setAvisoLink(''); aoCancelarEdicao(); };
+
+  // v112 — ABRIR A O.S. QUE JÁ EXISTE, sem jogar fora o que foi digitado.
+  // O caso real (Abraão, 24/09): 10 minutos de digitação, bloqueio de
+  // duplicata apontando uma O.S. de OUTRA escola, e a única saída oferecida
+  // era "ache na LISTA" — que o filtro do campo restrito não deixa ver.
+  // Aqui a O.S. existente entra no formulário como base e o que a pessoa
+  // digitou PREENCHE os campos que lá estiverem vazios (nada é sobrescrito:
+  // o registro do colega vale mais que o rascunho). Fotos anexadas ficam
+  // anexadas; fotos que já subiram entram na lista da O.S.
+  const abrirParaCompletar = () => {
+    const ex = osExistente;
+    if (!ex) return;
+    // mesma regra da LISTA: medição fechada é intocável para o campo
+    const fechada = !!(ex.medicao || '').trim() && ex.medicao !== medDoMes();
+    if (fechada && !ehGestor) { setMsg(`⛔ A O.S. ${refDaOS(ex)} está na medição FECHADA (${ex.medicao}) — só a gestão pode mexer. Avise no grupo.`); return; }
+    const t = (v: any) => (v == null ? '' : String(v).trim());
+    setOs(prev => ({
+      ...ex,
+      unidade: t(ex.unidade), fiscal: t(ex.fiscal),
+      classificacao: t(ex.classificacao), medicao: t(ex.medicao),
+      status: t(ex.status) || 'Executando',
+      executor: t(ex.executor) || prev.executor,
+      solicitado: t(ex.solicitado) || prev.solicitado,
+      servico: t(ex.servico) || prev.servico,
+      materiais: t(ex.materiais) || prev.materiais,
+      memoria_calculo: t(ex.memoria_calculo) || prev.memoria_calculo,
+      // fotos que a pessoa já tinha subido (caso "corrida") não se perdem
+      foto_urls: [...new Set([...(ex.foto_urls || []), ...(prev.foto_urls || [])])],
+    } as OSCampo));
+    setOsExistente(null);
+    setMsg('');
+    setAvisoLink(`✏️ Completando a O.S. ${refDaOS(ex)} (${ex.unidade}). O que você tinha digitado foi aproveitado — confira e SALVE.`);
+  };
 
   const mudaKit = (descricao: string, delta: number) =>
     setKit(prev => {
@@ -282,7 +323,8 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
       if (existe) {
         if (!ehGestor) {
           setSalvando(false);
-          setMsg(`⛔ A O.S. ${os.numero} JÁ EXISTE (${existe.unidade} · ${existe.status}). Se a sua é NOVA, deixe o Nº VAZIO — o sistema gera o ${prefixoRef ?? 'F'}-nº sozinho. Se é a mesma, ache-a na lista e edite pelo lápis.`);
+          setOsExistente(existe);   // v112: nada do que foi digitado se perde
+          setMsg(`⛔ A O.S. ${os.numero} JÁ EXISTE (${existe.unidade} · ${existe.status}). Se a sua é NOVA, deixe o Nº VAZIO — o sistema gera o ${prefixoRef ?? 'F'}-nº sozinho. Se é a MESMA, toque no botão azul pra ABRIR e completar — o que você digitou vai junto.`);
           return;
         }
         if (!confirm(`O.S. ${os.numero} já existe (${existe.unidade} · ${existe.status}). Criar DUPLICADA mesmo assim?`)) { setSalvando(false); return; }
@@ -337,7 +379,8 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
       if (corrida) {
         if (novas.length) { setOs(o => ({ ...o, foto_urls: urls })); setFotos([]); }
         setSalvando(false);
-        setMsg(`⛔ Enquanto as fotos subiam, outro colega registrou a O.S. ${os.numero} (${corrida.unidade} · ${corrida.status}). Ache-a na LISTA e complete pelo lápis — NÃO registre de novo.`);
+        setOsExistente(corrida);   // v112: o botão ABRIR leva a digitação junto
+        setMsg(`⛔ Enquanto as fotos subiam, outro colega registrou a O.S. ${os.numero} (${corrida.unidade} · ${corrida.status}). NÃO registre de novo: toque no botão azul pra ABRIR e completar — suas fotos já subiram e vão junto.`);
         return;
       }
     }
@@ -409,6 +452,7 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
     // a versão certa pro grupo (caso real: E01 do Emiliano, 02/09).
     setSalvaFoiEdicao(!!os.id);
     setAvisoLink('');
+    setOsExistente(null);   // v112: salvou = não há mais duplicata pendente
     setUltimaSalva({ ...(salva || dados), foto_urls: urls } as OSCampo);
     setLegendaPendente(null);   // v110: pendência de cópia era da O.S. anterior
     try { localStorage.removeItem(chaveRascunho); } catch { /* ok */ }
@@ -433,6 +477,15 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
           : 'bg-sky-50 border border-sky-200 text-sky-800'}`}>
           {avisoLink}
         </div>
+      )}
+      {/* v112: a saída do beco da duplicata — abre a O.S. existente
+          aproveitando o que a pessoa digitou (a LISTA do campo restrito
+          não mostra a O.S. dos outros; este botão não depende dela) */}
+      {osExistente && (
+        <button type="button" onClick={abrirParaCompletar}
+          className="w-full bg-sky-600 active:bg-sky-700 text-white font-bold py-3 rounded-xl text-sm">
+          ✏️ ABRIR a O.S. {refDaOS(osExistente)} ({osExistente.unidade}) e completar — sem perder o que digitei
+        </button>
       )}
       {/* v111: o link do fiscal abre DENTRO do WhatsApp, onde o envio de
           fotos não existe (erro do Queiroz/Tito, 24/09 — mesmo dia em que o
@@ -771,6 +824,13 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
       </div>
 
       {msg && <div className="text-sm font-medium text-fpv-700 bg-fpv-50 border border-fpv-100 rounded-lg px-3 py-2">{msg}</div>}
+      {/* v112: o mesmo botão perto da mensagem de bloqueio do salvar */}
+      {msg && osExistente && (
+        <button type="button" onClick={abrirParaCompletar}
+          className="w-full bg-sky-600 active:bg-sky-700 text-white font-bold py-3 rounded-xl text-sm">
+          ✏️ ABRIR a O.S. {refDaOS(osExistente)} ({osExistente.unidade}) e completar — sem perder o que digitei
+        </button>
+      )}
 
       {/* v78: mandar pro grupo COM legenda, na hora — a foto para de ir solta */}
       {ultimaSalva && (
