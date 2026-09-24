@@ -3,7 +3,7 @@ import { Pencil, Trash2, Siren, Search, CheckCircle2, Hash, Lock, ChevronDown, C
 import { OSCampo, refDaOS, MED_OPTIONS, buscaNorm } from '../types';
 import { medDoMes, hojeLocal, DESIGNADOS } from '../config';
 import { osService } from '../services/osService';
-import { compartilharOS, prepararFotos, enviarOS, legendaOS } from '../services/compartilhar';
+import { compartilharOS, prepararFotos, enviarOS, legendaOS, motivoDoUltimoErro } from '../services/compartilhar';
 import { supabase } from '../services/supabaseClient';
 
 interface Props {
@@ -247,12 +247,17 @@ const ListaOS: React.FC<Props> = ({ lista, aoEditar, aoMudar, filtroMinhas, rotu
     // v109 a falha era engolida e o operador colava no grupo o que estivesse
     // na área de transferência de antes (caso do Leony, 24/09). No 'erro'
     // seco, o prompt MOSTRA a legenda para copiar à mão: nada de colar vazio.
-    if (r === 'erro-copiado') alert('❌ NADA foi enviado — o aparelho recusou o compartilhamento.\n\nA legenda ficou copiada: cole no grupo e mande as fotos pela galeria.');
+    // v111: o motivo técnico vai NA mensagem — o print do campo vira diagnóstico
+    const motivo = motivoDoUltimoErro();
+    const rodape = motivo ? `\n\n(motivo técnico p/ suporte: ${motivo})` : '';
+    // v111: app aberto DENTRO do WhatsApp (link do fiscal) — share não existe lá
+    if (r === 'navegador-embutido') alert(`⚠️ NADA foi enviado: o app está aberto no navegador de DENTRO do WhatsApp, e o envio de fotos NÃO funciona aqui.\n\nAbra o app pelo ÍCONE na tela inicial (ou toque em ⋮ → "Abrir no Chrome"), ache esta O.S. na LISTA e compartilhe de lá.${rodape}`);
+    if (r === 'erro-copiado') alert(`❌ NADA foi enviado — o aparelho recusou o compartilhamento.\n\nA legenda ficou copiada: cole no grupo e mande as fotos pela galeria.${rodape}`);
     if (r === 'erro') {
       try {
-        window.prompt('❌ NADA foi enviado e a cópia automática falhou.\n\nCopie a legenda abaixo (segure e selecione tudo) e cole no grupo — as fotos vão pela galeria:', legenda);
+        window.prompt(`❌ NADA foi enviado e a cópia automática falhou.${rodape}\n\nCopie a legenda abaixo (segure e selecione tudo) e cole no grupo — as fotos vão pela galeria:`, legenda);
       } catch {
-        alert('❌ NADA foi enviado — o aparelho recusou o compartilhamento e a legenda NÃO foi copiada. Tente de novo.');
+        alert(`❌ NADA foi enviado — o aparelho recusou o compartilhamento e a legenda NÃO foi copiada. Tente de novo.${rodape}`);
       }
     }
     // v92: avisar quando a foto NÃO foi junto. Antes isso passava calado e o

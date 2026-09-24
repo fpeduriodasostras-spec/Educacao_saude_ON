@@ -28,6 +28,14 @@ método AIOS: erro numerado nunca volta.
   colar no grupo o conteúdo ANTIGO da área de transferência (caso Leony,
   24/09). Cópia sempre com prova: `copiarLegenda` devolve boolean (v110);
   falhou → botão COPIAR LEGENDA / prompt, porque toque novo = permissão nova.
+- **#24 Link tocado no WhatsApp abre o app no navegador EMBUTIDO** (WebView),
+  onde `navigator.share` não existe ou é recusado. O deep link do fiscal
+  estreou na v109 e NO MESMO DIA Queiroz e Tito, "todos na versão nova",
+  tiveram o envio recusado — não era versão velha, era o navegador de dentro
+  do WhatsApp. SALVAR funciona no embutido; COMPARTILHAR não. v111:
+  `navegadorEmbutido()` avisa na chegada e no envio ("salve aqui, compartilhe
+  pela LISTA no app de verdade"), e toda recusa de share agora escreve o
+  motivo técnico na mensagem — o print do campo virou o diagnóstico.
 
 ## Supabase / dados
 

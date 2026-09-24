@@ -7,7 +7,7 @@ import { KIT_EMERGENCIAL } from '../data/materiais';
 import { guiaMedida } from '../data/areas';
 import { VOZ_ATIVA, GESTORES, EQUIPES, CORRETIVA, DOIS_CONTRATOS, medDoMes, hojeLocal } from '../config';
 import { osService } from '../services/osService';
-import { compartilharOS, prepararFotos, enviarOS, legendaOS, copiarLegenda } from '../services/compartilhar';
+import { compartilharOS, prepararFotos, enviarOS, legendaOS, copiarLegenda, navegadorEmbutido, motivoDoUltimoErro } from '../services/compartilhar';
 import { deepLinkPrefill, consomeDeepLink } from '../services/deepLink';
 
 const normaliza = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, '');
@@ -434,6 +434,18 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
           {avisoLink}
         </div>
       )}
+      {/* v111: o link do fiscal abre DENTRO do WhatsApp, onde o envio de
+          fotos não existe (erro do Queiroz/Tito, 24/09 — mesmo dia em que o
+          link estreou). Avisar NA CHEGADA, antes de a pessoa preencher tudo
+          e só descobrir na hora de mandar pro grupo. Salvar funciona normal. */}
+      {navegadorEmbutido() && (
+        <div className="bg-amber-50 border border-amber-300 rounded-xl px-3 py-2.5 text-xs font-bold text-amber-800">
+          ⚠️ Você está no navegador de DENTRO do WhatsApp. Pode preencher e SALVAR
+          normalmente — mas o envio pro grupo NÃO funciona aqui. Depois de salvar,
+          abra o app pelo ÍCONE (ou ⋮ → "Abrir no Chrome"), ache a O.S. na LISTA
+          e compartilhe de lá.
+        </div>
+      )}
       {/* recuperação do rascunho: celular travou? nada se perdeu */}
       {rascunho && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5 flex items-center gap-2 flex-wrap text-xs font-bold text-amber-800">
@@ -830,8 +842,10 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
                 // e a tela mandava colar — colava-se o que estivesse na área de
                 // transferência de antes. Agora o 'erro' seco ganha um botão
                 // "copiar legenda" logo abaixo (toque novo = cópia aceita).
-                r === 'erro-copiado' ? '❌ NADA foi enviado — o aparelho recusou o compartilhamento. A legenda está copiada: cole no grupo e mande as fotos pela galeria.' :
-                r === 'cancelado' ? '' : '❌ NADA foi enviado — o aparelho recusou o compartilhamento e a legenda NÃO foi copiada. Toque em COPIAR LEGENDA abaixo, cole no grupo e mande as fotos pela galeria.'
+                // v111: app dentro do WhatsApp (link do fiscal) — share não existe lá
+                r === 'navegador-embutido' ? '⚠️ NADA foi enviado: o app está aberto no navegador de DENTRO do WhatsApp, onde o envio de fotos não funciona. A O.S. está SALVA — abra o app pelo ÍCONE (ou ⋮ → "Abrir no Chrome"), ache-a na LISTA e compartilhe de lá.' :
+                r === 'erro-copiado' ? `❌ NADA foi enviado — o aparelho recusou o compartilhamento. A legenda está copiada: cole no grupo e mande as fotos pela galeria.${motivoDoUltimoErro() ? ` (motivo: ${motivoDoUltimoErro()})` : ''}` :
+                r === 'cancelado' ? '' : `❌ NADA foi enviado — o aparelho recusou o compartilhamento e a legenda NÃO foi copiada. Toque em COPIAR LEGENDA abaixo, cole no grupo e mande as fotos pela galeria.${motivoDoUltimoErro() ? ` (motivo: ${motivoDoUltimoErro()})` : ''}`
               );
               if (r === 'erro') setLegendaPendente(legendaOS(ultimaSalva, medDoMes()));
               // só some sozinho quando foi tudo; se faltou foto, o aviso fica

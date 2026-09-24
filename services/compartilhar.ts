@@ -166,8 +166,32 @@ export type ResultadoShare =
   | 'compartilhado-parcial' // texto + parte das fotos (o aparelho não aceitou todas)
   | 'compartilhado-sem-fotos' // só o texto — as fotos NÃO foram
   | 'copiado' | 'cancelado'
+  | 'navegador-embutido'   // app aberto DENTRO do WhatsApp/Instagram — share não existe lá
   | 'erro-copiado'         // a folha foi recusada, MAS a legenda está na área de transferência
   | 'erro';                // a folha foi recusada E a cópia falhou — NADA ficou no aparelho
+
+// v111 — NAVEGADOR EMBUTIDO (o "navegador de dentro" do WhatsApp/Instagram).
+// O link do fiscal (v109) é tocado DENTRO do WhatsApp, e o app abre no
+// navegador embutido dele — lá o compartilhamento nativo NÃO existe (ou vem
+// capado e recusa). Foi o erro do Queiroz e do Tito em 24/09, no MESMO dia
+// em que o link entrou no ar: todos na versão nova, e mesmo assim "o
+// aparelho recusou". Salvar a O.S. funciona normalmente no embutido — só o
+// envio pro grupo que não; a orientação é salvar ali e compartilhar depois
+// pela LISTA, com o app aberto no Chrome/ícone.
+// Sinais: celular SEM navigator.share, ou user agent de WebView ("; wv)")
+// e dos apps que embutem navegador (WhatsApp/FBAN/FB_IAB/Instagram).
+const ehCelular = /Android|iPhone|iPad/i.test(navigator.userAgent || '');
+export const navegadorEmbutido = (): boolean =>
+  ehCelular && (
+    !('share' in navigator) ||
+    /; wv\)|WhatsApp|FB_IAB|FBAN|Instagram|Line\//i.test(navigator.userAgent || '')
+  );
+
+// v111 — o MOTIVO técnico da última recusa (nome + mensagem do erro real).
+// Vai escrito na mensagem da tela: o print que o campo manda no grupo passa
+// a ser o próprio diagnóstico, em vez de "não funciona" sem pista.
+let motivoErro = '';
+export const motivoDoUltimoErro = () => motivoErro;
 
 // v110 — cópia COM PROVA: só devolve true se o navegador CONFIRMOU a escrita.
 // Depois de uma folha de compartilhamento recusada, o Chrome costuma negar
@@ -245,6 +269,7 @@ export const enviarOS = async (
   texto: string, fotos: File[], totalUrls: number,
 ): Promise<ResultadoShare> => {
   const nav = navigator as any;
+  motivoErro = '';
 
   if (nav.share && fotos.length) {
     // REGRA DO RENAN (18/09): a legenda VAI SEMPRE junto com as fotos.
@@ -263,6 +288,10 @@ export const enviarOS = async (
         return faltam > 0 ? 'compartilhado-parcial' : 'compartilhado';
       } catch (e: any) {
         if (e?.name === 'AbortError') return 'cancelado';   // usuário fechou a folha
+        motivoErro = `${e?.name || 'Erro'}: ${e?.message || e}`;
+        // share existe mas foi recusado DENTRO de um navegador embutido:
+        // o conserto não é tentar de novo, é abrir o app no Chrome/ícone
+        if (navegadorEmbutido()) { copiarLegenda(txt); return 'navegador-embutido'; }
         // recusou: NÃO abre uma segunda folha. E o retorno DIZ se a legenda
         // ficou copiada de verdade — 'erro' seco significa que NADA ficou.
         return (await copiarLegenda(txt)) ? 'erro-copiado' : 'erro';
@@ -279,8 +308,14 @@ export const enviarOS = async (
       return totalUrls > 0 ? 'compartilhado-sem-fotos' : 'compartilhado';
     } catch (e: any) {
       if (e?.name === 'AbortError') return 'cancelado';
+      motivoErro = `${e?.name || 'Erro'}: ${e?.message || e}`;
+      if (navegadorEmbutido()) { copiarLegenda(texto); return 'navegador-embutido'; }
     }
   }
+
+  // celular que chegou até aqui não tem navigator.share = navegador
+  // embutido. NÃO é desktop: avisar para abrir no Chrome, não fingir cópia.
+  if (navegadorEmbutido()) { copiarLegenda(texto); return 'navegador-embutido'; }
 
   // desktop: copia a legenda (as fotos o gestor pega no app/relatório)
   if (await copiarLegenda(texto)) return 'copiado';
