@@ -277,9 +277,23 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
   // guia de medida específico pelo texto do serviço (fórmula EMOP certa)
   const guia = guiaMedida(`${os.servico} ${os.solicitado || ''}`.trim(), os.area);
 
+  // v113 — TRAVA SÍNCRONA NO SALVAR. `salvando` é state do React e chega
+  // TARDE: dois toques no mesmo frame liam os dois 'false' e passavam os
+  // DOIS — cada um gravando uma O.S. Sem nº oficial não há guarda de
+  // duplicata (cada gravação ganha um fictício novo), então nasciam DUAS
+  // O.S. iguais com números diferentes: caso F-113/F-114 (Carlos Alberto,
+  // 01/09) e o "lançar duplicado" do Neilson (28/09). É o MESMO defeito que
+  // a v106 matou no compartilhar; o ref muda na hora e fecha a porta.
+  const emSalvar = useRef(false);
   const salvar = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (salvando) return; // anti duplo-toque (refatoração sênior 06/07)
+    if (emSalvar.current) return;
+    emSalvar.current = true;
+    try { await salvarDeVerdade(); } finally { emSalvar.current = false; }
+  };
+
+  const salvarDeVerdade = async () => {
+    if (salvando) return; // cinto e suspensório: o ref acima é a trava real
     // ===== validações SÍNCRONAS (antes de travar o botão) =====
     if (!os.unidade.trim()) { setMsg('Informe a unidade (escola).'); return; }
     if (equipe && !os.executor) { setMsg('Toque em QUEM EXECUTOU (botões da equipe).'); return; }

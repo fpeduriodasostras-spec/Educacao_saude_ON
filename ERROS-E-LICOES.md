@@ -15,7 +15,11 @@ método AIOS: erro numerado nunca volta.
 - **#3 "Limpar dados do site" apaga permissão do mic E a sessão.** Nunca
   orientar limpeza de dados como troubleshooting sem avisar o efeito.
 - **#4 Duplo-toque duplica registro.** Travar o botão com ref/state ANTES de
-  qualquer `await`; destravar em todo early-return (v33).
+  qualquer `await`; destravar em todo early-return (v33). ⚠️ STATE NÃO BASTA:
+  setState é assíncrono — dois toques no mesmo frame leem 'false' os dois e
+  passam os DOIS. A trava real é `useRef` + try/finally (share: v106; SALVAR
+  só ganhou a dele na v113 — até lá o duplo-toque gravava DUAS O.S. com
+  fictícios diferentes: F-113/F-114 em 01/09 e o caso Neilson de 28/09).
 - **#5 Campo digita o nº do papel.** Caso real: "79" digitado colidiu com a
   O.S. 79 oficial de janeiro. Guarda `numeroExiste()` bloqueia; gestor força
   com confirm (v29).
