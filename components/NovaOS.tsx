@@ -44,6 +44,28 @@ const vaziaPara = (usuario: string): OSCampo => {
   };
 };
 
+// nulls do banco viram '' (crash real 10/07: linhas do n8n com NULL abriam
+// TELA CINZA no .trim()) — mesmo saneamento da edição pelo lápis
+const normalizaOS = (o: OSCampo): OSCampo => {
+  const t = (v: any) => (v == null ? '' : String(v));
+  return {
+    ...o,
+    unidade: t(o.unidade), fiscal: t(o.fiscal),
+    classificacao: t(o.classificacao), executor: t(o.executor),
+    status: t(o.status) || 'Executando', medicao: t(o.medicao),
+    solicitado: t(o.solicitado), servico: t(o.servico),
+    materiais: t(o.materiais), memoria_calculo: t(o.memoria_calculo),
+    foto_urls: o.foto_urls || [],
+  };
+};
+
+// (v110: a ideia de MESCLAR o digitado na O.S. existente na hora do salvar
+// foi descartada na revisão adversarial — não dá para distinguir "mesma
+// O.S. clicada pelo link" de "número errado digitado numa O.S. nova", e os
+// defaults do formulário atropelariam dado do colega, ex.: status Concluído
+// regredindo a Executando. A edição direta acontece só na CHEGADA pelo
+// link, com o formulário ainda intocado.)
+
 interface Props {
   editando: OSCampo | null;
   usuario: string;
@@ -64,7 +86,12 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
   const [avisoLink, setAvisoLink] = useState('');
   const [os, setOs] = useState<OSCampo>(() =>
     prefillLink.current ? { ...vaziaPara(usuario), ...prefillLink.current } : vaziaPara(usuario));
+  // espelho do estado p/ os efeitos assíncronos lerem o valor ATUAL
+  const osRef = useRef(os);
+  useEffect(() => { osRef.current = os; }, [os]);
   const [fotos, setFotos] = useState<File[]>([]);
+  const fotosRef = useRef<File[]>([]);
+  useEffect(() => { fotosRef.current = fotos; }, [fotos]);
   const [kit, setKit] = useState<Record<string, number>>({}); // descricao → qtd usada
   const [kitAberto, setKitAberto] = useState(false);
   const [baixaAuto, setBaixaAuto] = useState(true);
@@ -101,17 +128,9 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
   useEffect(() => {
     if (editando) {
       // NORMALIZA NULLS (crash real 10/07: O.S. inseridas pelo n8n vêm com
-      // NULL onde o app grava '' — a 1839 abria em TELA CINZA no .trim())
-      const t = (v: any) => (v == null ? '' : String(v));
-      setOs({
-        ...editando,
-        unidade: t(editando.unidade), fiscal: t(editando.fiscal),
-        classificacao: t(editando.classificacao), executor: t(editando.executor),
-        status: t(editando.status) || 'Executando', medicao: t(editando.medicao),
-        solicitado: t(editando.solicitado), servico: t(editando.servico),
-        materiais: t(editando.materiais), memoria_calculo: t(editando.memoria_calculo),
-        foto_urls: editando.foto_urls || [],
-      });
+      // NULL onde o app grava '' — a 1839 abria em TELA CINZA no .trim());
+      // v110: saneamento extraído p/ normalizaOS (o deep link usa o mesmo)
+      setOs(normalizaOS(editando));
       // evita carregar fotos/kit de um formulário anterior para a O.S. editada
       setFotos([]);
       setKit({});
@@ -120,21 +139,53 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
     }
   }, [editando]);
 
-  // v109: consumo do deep link — limpa a query da barra (F5 não re-preenche)
-  // e avisa NA HORA se um colega já registrou essa O.S. (antes o colaborador
-  // só descobria no salvar, com uma mensagem que sugeria gerar fictícia).
+  // v109: consumo do deep link — limpa a query da barra (F5 não re-preenche).
+  // v110 (caso real do emergencial Renato, 29/09): se a O.S. JÁ EXISTE no
+  // banco (ponte 3x/dia ou colega), o link abre DIRETO EM EDIÇÃO — o mesmo
+  // caminho do lápis, sem caçar na lupa e sem redigitar tudo.
+  const linkProcessado = useRef(false);
   useEffect(() => {
     const p = prefillLink.current;
-    if (!p) return;
+    if (!p || linkProcessado.current) return;
+    linkProcessado.current = true;
     consomeDeepLink();
+    const snapInicial = JSON.stringify(osRef.current);
     (async () => {
       if (!p.numero) return;
-      const existe = await osService.numeroExiste(Number(p.numero));
-      // v112: NÃO mandar "achar na LISTA" — o campo restrito só vê as
-      // PRÓPRIAS O.S., e a de outro colega é invisível pra ele (beco sem
-      // saída do Abraão, 24/09). O botão ABRIR leva direto pra O.S.
-      if (existe) { setOsExistente(existe); setAvisoLink(`⛔ A O.S. ${p.numero} JÁ FOI REGISTRADA (${existe.unidade} · ${existe.status}) — outro colega chegou primeiro. NÃO registre de novo: toque no botão azul pra ABRIR e completar.`); }
-      else setAvisoLink(`📥 O.S. ${p.numero} recebida do fiscal — confira os dados, registre a execução e mande pro grupo.`);
+      const existente = await osService.buscaPorNumero(Number(p.numero));
+      if (!existente) {
+        setAvisoLink(`📥 O.S. ${p.numero} recebida do fiscal — confira os dados, registre a execução e mande pro grupo.`);
+        return;
+      }
+      // medição FECHADA: nem adianta abrir em edição — o salvar recusaria
+      // depois de todo o trabalho digitado. Avisa ANTES de qualquer digitação.
+      if (!ehGestor && (existente.medicao || '').trim() && existente.medicao !== medDoMes()) {
+        setAvisoLink(`🔒 A O.S. ${p.numero} está na ${existente.medicao} (medição FECHADA) — só a GESTÃO pode alterá-la. NÃO registre de novo; fale com a gestão.`);
+        return;
+      }
+      // a busca demorou (sinal da escola) e a pessoa já mexeu no formulário
+      // (digitou ou anexou foto)? Não troca a tela embaixo dela.
+      // v114 (fusão): aqui a identidade da O.S. veio do LINK — não há
+      // ambiguidade de "número errado". Em vez de mandar copiar tudo à mão
+      // (beco do campo restrito, caso Abraão), o botão azul ABRIR leva a
+      // digitação junto: campos vazios da O.S. recebem o texto, nada do
+      // colega é sobrescrito.
+      if (JSON.stringify(osRef.current) !== snapInicial || fotosRef.current.length > 0) {
+        setOsExistente(existente);
+        setAvisoLink(`⛔ A O.S. ${p.numero} JÁ ESTÁ REGISTRADA (${existente.status}) — o formulário não virou edição porque você já tinha começado a preencher. Toque no botão azul pra ABRIR e completar: o que você digitou vai junto.`);
+        return;
+      }
+      const carregada = normalizaOS(existente);
+      // o que o fiscal mandou no link completa APENAS campos vazios do registro
+      if (!carregada.solicitado && p.solicitado) carregada.solicitado = p.solicitado;
+      if (!carregada.area && p.area) carregada.area = p.area;
+      if (!carregada.unidade && p.unidade) carregada.unidade = p.unidade;
+      if (!carregada.entrada && p.entrada) carregada.entrada = p.entrada;
+      setOs(carregada);
+      // fotos anexadas nesse meio-tempo FICAM (são desta O.S.); kit zera —
+      // com os.id o painel some da tela e a baixa de estoque não roda
+      setKit({}); setKitAberto(false);
+      setAvisoLink(`✏️ A O.S. ${p.numero} já estava registrada (${existente.status}) — aberta em EDIÇÃO, igual ao lápis. Complete a execução e salve.`);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -143,7 +194,12 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
   // digitação — caso do encarregado que prefere papel): cada tecla fica
   // guardada NO APARELHO; travou/fechou, ao reabrir aparece o botão
   // "Recuperar". Some sozinho ao salvar com sucesso ou descartar.
-  const chaveRascunho = editando?.id ? `fpv_rascunho_${editando.id}` : 'fpv_rascunho_novo';
+  // v110: a chave segue a O.S. QUE ESTÁ NO FORMULÁRIO (os.id), não só a prop
+  // editando — a edição aberta pelo deep link tem editando=null, e gravar uma
+  // O.S. com id na chave 'novo' fazia o Recuperar de dias depois transformar
+  // um registro novo em UPDATE silencioso da O.S. antiga (revisão adversarial)
+  const idRascunho = os.id ?? editando?.id;
+  const chaveRascunho = idRascunho ? `fpv_rascunho_${idRascunho}` : 'fpv_rascunho_novo';
   const [rascunho, setRascunho] = useState<OSCampo | null>(null);
   useEffect(() => {
     // v109 (revisão): rascunho antigo CONTINUA sendo oferecido mesmo chegando
@@ -394,7 +450,7 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
         if (novas.length) { setOs(o => ({ ...o, foto_urls: urls })); setFotos([]); }
         setSalvando(false);
         setOsExistente(corrida);   // v112: o botão ABRIR leva a digitação junto
-        setMsg(`⛔ Enquanto as fotos subiam, outro colega registrou a O.S. ${os.numero} (${corrida.unidade} · ${corrida.status}). NÃO registre de novo: toque no botão azul pra ABRIR e completar — suas fotos já subiram e vão junto.`);
+        setMsg(`⛔ Enquanto as fotos subiam, outro colega registrou a O.S. ${os.numero} (${corrida.unidade} · ${corrida.status}). NÃO registre de novo: toque no botão azul pra ABRIR e completar — suas fotos já estão guardadas no servidor e vão junto.`);
         return;
       }
     }

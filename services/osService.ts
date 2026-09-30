@@ -199,8 +199,24 @@ export const osService = {
   // 06/07: equipe digitou "79" seguindo a contagem do papel e colidiu
   // com a O.S. 79 oficial de janeiro)
   async numeroExiste(n: number): Promise<OSCampo | null> {
+    // order fixo: nas duplicatas legadas (1218/1673), reportar a MESMA linha
+    // que buscaPorNumero abriria
     const { data, error } = await supabase.from('os_campo')
-      .select('id,numero,unidade,status').eq('numero', n).limit(1);
+      .select('id,numero,unidade,status').eq('numero', n)
+      .order('id', { ascending: true }).limit(1);
+    if (error || !data || data.length === 0) return null;
+    return data[0] as OSCampo;
+  },
+
+  // v110: a O.S. COMPLETA pelo nº oficial — o deep link do fiscal abre em
+  // EDIÇÃO quando ela já existe (ponte 3x/dia ou colega), em vez de mandar
+  // o colaborador caçar na lupa (pedido do Renan 29/09).
+  // not(excluida is true) e não eq false: linha legada com excluida NULL
+  // também é viva (eq.false não casa NULL)
+  async buscaPorNumero(n: number): Promise<OSCampo | null> {
+    const { data, error } = await supabase.from('os_campo')
+      .select('*').eq('numero', n).not('excluida', 'is', true)
+      .order('id', { ascending: true }).limit(1);
     if (error || !data || data.length === 0) return null;
     return data[0] as OSCampo;
   },
