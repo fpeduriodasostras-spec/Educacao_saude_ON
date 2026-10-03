@@ -106,7 +106,10 @@ const App: React.FC = () => {
   // (decisão Renan 07/07)
   // prioridade P1-P3: assistente de engenharia + gestão (Marcio entrou no
   // lugar do Nicolas em 01/09; o nome antigo fica até a conta ser apagada)
-  const podePriorizar = ['marcio', 'renan', 'lucas'].includes(usuario);
+  // v112: Juan entrou aqui a pedido do Renan (02/10) — perfil igual ao do
+  // Lucas: gestão completa MAIS despacho (designar equipe e prioridade P1-P3).
+  // O módulo Financeiro continua só com Lucas e Rafael (Gestao.tsx:1306).
+  const podePriorizar = ['marcio', 'renan', 'lucas', 'juan'].includes(usuario);
   const equipe = EQUIPES[usuario];
   const corretiva = CORRETIVA[usuario];
   // "responsabilidade do autor do painel": encarregado vê as O.S. em

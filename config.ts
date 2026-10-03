@@ -9,7 +9,11 @@
 export const VOZ_ATIVA = false;
 
 // Nicolas saiu em 01/09 (conta bloqueada); Marcio Junior assumiu a assistência
-export const GESTORES = ['lucas', 'rafael', 'marcio', 'renan', 'edmar'];
+// Juan entrou em 02/10 com o perfil do EDMAR: gestão completa (vê tudo, abre a
+// aba Gestão, enxerga o almoxarifado) mas SEM despacho — não designa equipe nem
+// define prioridade P1-P3, que é a lista `podePriorizar` do App.tsx.
+// Para dar despacho a ele é uma palavra: acrescentar 'juan' naquela lista.
+export const GESTORES = ['lucas', 'rafael', 'marcio', 'renan', 'edmar', 'juan'];
 
 // João só enxerga o Almoxarifado — ele é o responsável pelo estoque,
 // não lança O.S. (gestão também vê a aba p/ acompanhar)
@@ -104,6 +108,7 @@ export const ACESSOS: Acesso[] = [
   { rotulo: 'Lucas', email: 'lucas@fpv.app', dica: 'gestor geral', emoji: '📊', grupo: 'gestao' },
   { rotulo: 'Rafael', email: 'rafael@fpv.app', dica: 'gestão', emoji: '📊', grupo: 'gestao' },
   { rotulo: 'Edmar', email: 'edmar@fpv.app', dica: 'medição', emoji: '📐', grupo: 'gestao' },
+  { rotulo: 'Juan', email: 'juan@fpv.app', dica: 'gestão', emoji: '📊', grupo: 'gestao' },
   { rotulo: 'Brendah', email: 'brendah@fpv.app', dica: 'cadastros · esteira', emoji: '📋', grupo: 'gestao' },
 ];
 
