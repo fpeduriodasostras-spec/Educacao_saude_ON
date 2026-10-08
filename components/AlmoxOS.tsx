@@ -104,6 +104,17 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
   // data, origem, O.S., escola, contrato e retirante.
   const [cesta, setCesta] = useState<{ descricao: string; quantidade: number; unidade: string }[]>([]);
   const refMaterial = useRef<HTMLInputElement>(null);
+  // v117 (pedido do Marcio 08/10): a mesma CESTA na ENTRADA. Uma nota fiscal
+  // traz vários materiais; antes cada um era um lançamento com a foto da NF
+  // enviada de novo. Agora data, origem, nº da NF e a foto são do cabeçalho
+  // e os itens se empilham — cada um vira sua linha em entrada_material.
+  const [cestaEntrada, setCestaEntrada] = useState<{ descricao: string; quantidade: number; unidade: string }[]>([]);
+  const refMaterialEntrada = useRef<HTMLInputElement>(null);
+  // foto da NF que JÁ subiu: se o insert falhar e ele tocar de novo, reusa a
+  // mesma URL em vez de mandar a foto outra vez (storage está no limite)
+  const nfEnviada = useRef<{ arquivo: File; url: string } | null>(null);
+  // v117 (pedido do Marcio 08/10): lupa no Estoque — "quanto tem de X?"
+  const [buscaEstoque, setBuscaEstoque] = useState('');
   const [itens, setItens] = useState<ItemEstoque[]>([]);
   const [entradas, setEntradas] = useState<Entrada[]>([]);
   const [ferramentas, setFerramentas] = useState<Ferramenta[]>([]);
@@ -568,20 +579,63 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
     try { await salvarEntradaDeVerdade(); } finally { emGravarEntrada.current = false; setSalvando(false); }
   };
 
+  // v117: joga o material digitado na cesta da NOTA e limpa material +
+  // quantidade (unidade fica — costuma repetir). Data, origem, nº da NF e a
+  // foto ficam no cabeçalho, que é o ponto de tudo isto.
+  const addNaCestaEntrada = () => {
+    const d = (entrada.descricao || '').trim();
+    if (!d) { setMsg('Escreva o material antes de adicionar.'); return; }
+    if (!entrada.quantidade || entrada.quantidade <= 0) { setMsg('Quantidade precisa ser maior que zero.'); return; }
+    setCestaEntrada(c => [...c, { descricao: d, quantidade: entrada.quantidade, unidade: entrada.unidade }]);
+    setEntrada(p => ({ ...p, descricao: '', quantidade: 1 }));
+    setMsg('');
+    setTimeout(() => refMaterialEntrada.current?.focus(), 0);
+  };
+
   const salvarEntradaDeVerdade = async () => {
-    if (!entrada.descricao.trim()) { setMsg('Informe o material da entrada.'); return; }
+    // v117: grava a CESTA da nota + o que estiver digitado agora (igual à
+    // saída: ele pode empilhar 4 e salvar com o 5º ainda no campo)
+    const itensEntrada = [...cestaEntrada];
+    const digitado = (entrada.descricao || '').trim();
+    if (digitado) {
+      if (!entrada.quantidade || entrada.quantidade <= 0) {
+        setMsg(`Quantidade de "${digitado}" precisa ser maior que zero — ou apague o material para salvar só a lista.`);
+        return;
+      }
+      itensEntrada.push({ descricao: digitado, quantidade: entrada.quantidade, unidade: entrada.unidade });
+    }
+    if (itensEntrada.length === 0) { setMsg('Informe o material da entrada.'); return; }
     setSalvando(true); setMsg('');
+    // a foto da NF sobe UMA vez por nota (antes: uma vez por material)
     let nf_url: string | null = null;
     if (nfFoto) {
-      const r = await osService.uploadFoto(nfFoto);   // v103: agora devolve o motivo
-      nf_url = r.url;
-      if (!r.url) { setSalvando(false); setMsg('Foto da NF não subiu: ' + (r.erro || 'falha desconhecida')); return; }
+      if (nfEnviada.current && nfEnviada.current.arquivo === nfFoto) {
+        nf_url = nfEnviada.current.url;              // retry: a foto já está lá
+      } else {
+        const r = await osService.uploadFoto(nfFoto);   // v103: agora devolve o motivo
+        nf_url = r.url;
+        if (!r.url) { setSalvando(false); setMsg('Foto da NF não subiu: ' + (r.erro || 'falha desconhecida')); return; }
+        nfEnviada.current = { arquivo: nfFoto, url: r.url };
+      }
     }
-    const payload: any = { ...entrada, nf_url }; delete payload.id;
-    const { error } = await supabase.from('entrada_material').insert([payload]);
+    const base: any = { ...entrada, nf_url }; delete base.id;
+    // UMA LINHA POR ITEM, todas com o mesmo cabeçalho da nota — o saldo soma
+    // por descrição de material, então nada de juntar em texto
+    const linhas = itensEntrada.map(i => ({ ...base, descricao: i.descricao, quantidade: i.quantidade, unidade: i.unidade }));
+    const { error } = await supabase.from('entrada_material').insert(linhas);
     setSalvando(false);
     if (error) { setMsg(/entrada_material/.test(error.message) ? '⚠️ Rode o ALMOX-V2.sql no Supabase primeiro.' : 'Erro: ' + error.message); return; }
-    setMsg(`✅ Entrada: ${entrada.quantidade} ${entrada.unidade} ${entrada.descricao}${nf_url ? ' 🧾 NF anexada' : (nfFoto ? ' ⚠️ NF falhou no envio' : '')}`);
+    // v117: material que não está no catálogo NÃO aparece no Estoque (o
+    // saldo é por item cadastrado) — avisa em vez de sumir calado
+    const foraCatalogo = Array.from(new Set(
+      itensEntrada.filter(i => !itens.some(it => norm(it.descricao) === norm(i.descricao))).map(i => i.descricao)
+    ));
+    const resumo = itensEntrada.length === 1
+      ? `${itensEntrada[0].quantidade} ${itensEntrada[0].unidade} ${itensEntrada[0].descricao}`
+      : `${itensEntrada.length} itens (${itensEntrada.map(i => `${i.quantidade} ${i.unidade} ${i.descricao}`).join(' · ')})`;
+    setMsg(`✅ Entrada: ${resumo}${nf_url ? ' 🧾 NF anexada' : ''}` +
+      (foraCatalogo.length ? ` ⚠️ fora do catálogo (não aparece no Estoque até cadastrar): ${foraCatalogo.join(', ')}.` : ''));
+    setCestaEntrada([]); nfEnviada.current = null;
     setEntrada({ ...ENTRADA_VAZIA }); setNfFoto(null); carregar();
   };
 
@@ -1333,24 +1387,66 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
 
           <form onSubmit={salvarEntrada} className="bg-white rounded-2xl border border-stone-200 shadow-sm p-5 space-y-3">
             <h2 className="font-bold text-stone-900 text-sm">Entrada de material (compra) — com foto da NOTA</h2>
+            <p className="text-[11px] text-stone-500 -mt-1">Uma nota com vários materiais? Preencha a nota uma vez e use “Adicionar este item” para cada material.</p>
+            {/* v117: CABEÇALHO DA NOTA — vale para todos os itens da cesta */}
             <div className="grid grid-cols-2 gap-3">
               <input type="date" value={entrada.data} onChange={e => setEntrada(p => ({ ...p, data: e.target.value }))} className={inputCls} />
-              <input value={entrada.origem} onChange={e => setEntrada(p => ({ ...p, origem: e.target.value }))} placeholder="origem/fornecedor" className={inputCls} />
+              <input value={entrada.origem} onChange={e => setEntrada(p => ({ ...p, origem: e.target.value }))}
+                onKeyDown={e => { if (e.key === 'Enter') e.preventDefault(); }}
+                placeholder="origem/fornecedor" className={inputCls} />
             </div>
-            <input list="materiais" value={entrada.descricao} onChange={e => setEntrada(p => ({ ...p, descricao: e.target.value }))} placeholder="material" className={inputCls} />
-            <div className="grid grid-cols-2 gap-3">
-              <input type="number" step="0.01" min="0" value={entrada.quantidade} onChange={e => setEntrada(p => ({ ...p, quantidade: parseFloat(e.target.value) || 0 }))} className={inputCls} />
-              <select value={entrada.unidade} onChange={e => setEntrada(p => ({ ...p, unidade: e.target.value }))} className={inputCls}>
-                {UNIDADES.map(u => <option key={u}>{u}</option>)}
-              </select>
-            </div>
-            <input value={entrada.obs || ''} onChange={e => setEntrada(p => ({ ...p, obs: e.target.value }))} placeholder="observação / nº da NF" className={inputCls} />
+            {/* Enter no cabeçalho NÃO grava: com itens já na lista, um Enter
+                aqui lançaria a nota pela metade */}
+            <input value={entrada.obs || ''} onChange={e => setEntrada(p => ({ ...p, obs: e.target.value }))}
+              onKeyDown={e => { if (e.key === 'Enter') e.preventDefault(); }}
+              placeholder="nº da NF / observação" className={inputCls} />
             <label className="flex items-center gap-2 text-sm font-bold text-fpv-700 bg-fpv-50 border border-fpv-100 px-4 py-2.5 rounded-lg cursor-pointer w-fit">
               <Camera size={16} /> {nfFoto ? `🧾 ${nfFoto.name.slice(0, 18)}…` : 'Foto da nota fiscal'}
               <input type="file" accept="image/*" className="hidden" onChange={e => setNfFoto(e.target.files?.[0] || null)} />
             </label>
+            {/* v117: ITENS DA NOTA — Enter no material ou na quantidade adiciona */}
+            <input ref={refMaterialEntrada} list="materiais" value={entrada.descricao}
+              onChange={e => setEntrada(p => ({ ...p, descricao: e.target.value }))}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addNaCestaEntrada(); } }}
+              placeholder="material" className={inputCls} />
+            <div className="grid grid-cols-2 gap-3">
+              <input type="number" step="0.01" min="0" value={entrada.quantidade}
+                onChange={e => setEntrada(p => ({ ...p, quantidade: parseFloat(e.target.value) || 0 }))}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addNaCestaEntrada(); } }}
+                className={inputCls} />
+              <select value={entrada.unidade} onChange={e => setEntrada(p => ({ ...p, unidade: e.target.value }))} className={inputCls}>
+                {UNIDADES.map(u => <option key={u}>{u}</option>)}
+              </select>
+            </div>
+            <button type="button" onClick={addNaCestaEntrada}
+              className="w-full border-2 border-dashed border-fpv-300 text-fpv-700 font-bold py-2.5 rounded-xl text-sm flex items-center justify-center gap-2 hover:bg-fpv-50">
+              <Plus size={16} /> Adicionar este item e lançar outro da mesma nota
+            </button>
+            {cestaEntrada.length > 0 && (
+              <div className="bg-fpv-50/60 border border-fpv-200 rounded-xl p-3 space-y-1.5">
+                <p className="text-[11px] font-bold uppercase text-fpv-800">
+                  {cestaEntrada.length} {cestaEntrada.length === 1 ? 'item' : 'itens'} nesta nota
+                  {(entrada.obs || '').trim() ? ` · ${entrada.obs}` : ''}
+                  {(entrada.origem || '').trim() ? ` · ${entrada.origem}` : ''}
+                </p>
+                {cestaEntrada.map((c, ix) => (
+                  <div key={`${c.descricao}-${ix}`} className="flex items-center gap-2 bg-white rounded-lg border border-fpv-100 px-2.5 py-1.5">
+                    <span className="flex-1 text-[13px] text-stone-800"><b>{c.quantidade} {c.unidade}</b> {c.descricao}</span>
+                    <button type="button" onClick={() => setCestaEntrada(l => l.filter((_, i2) => i2 !== ix))}
+                      className="text-red-500 shrink-0" title="tirar da lista"><X size={15} /></button>
+                  </div>
+                ))}
+                <p className="text-[11px] text-fpv-800/80">
+                  Todos entram com a mesma data, origem, nº da NF e foto. O que estiver escrito no campo de material também entra ao salvar.
+                </p>
+              </div>
+            )}
             <button type="submit" disabled={salvando} className="w-full bg-fpv-500 hover:bg-fpv-600 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2">
-              {salvando ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />} Registrar entrada
+              {salvando ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+              {(() => {
+                const n = cestaEntrada.length + (((entrada.descricao || '').trim() && entrada.quantidade > 0) ? 1 : 0);
+                return n > 1 ? `Registrar entrada (${n} itens)` : 'Registrar entrada';
+              })()}
             </button>
           </form>
 
@@ -1417,18 +1513,71 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
       {sub === 'estoque' && (
         <div className="bg-white rounded-2xl border border-stone-200 shadow-sm p-5">
           <h2 className="font-bold text-stone-900 text-sm mb-3">Estoque ({itens.length} itens cadastrados)</h2>
-          <div className="flex gap-1.5 flex-wrap mb-3">
-            {['TODAS', ...CATEGORIAS].map(c => (
-              <button key={c} onClick={() => setCatFiltro(c)}
-                className={`text-[11px] font-bold px-2.5 py-1 rounded-full border ${catFiltro === c ? 'bg-stone-800 text-white border-stone-800' : 'bg-white text-stone-500 border-stone-200'}`}>{c}</button>
-            ))}
+          {/* v117 (pedido do Marcio 08/10): LUPA — "quanto tem de X?".
+              Mesma régua de busca do resto do app (sem acento, letra dobrada
+              tanto faz) e por PALAVRAS: "lamp 18" acha LÂMPADA TUBULAR 18W.
+              Buscando, procura em TODAS as categorias. */}
+          <div className="relative mb-3">
+            <Search size={15} className="absolute left-3 top-3 text-stone-400" />
+            <input value={buscaEstoque} onChange={e => setBuscaEstoque(e.target.value)}
+              placeholder="procurar material (ex.: sifão, lâmpada 18)…"
+              className="w-full pl-9 pr-9 py-2.5 text-sm border border-stone-200 rounded-lg bg-stone-50 outline-none focus:border-fpv-500" />
+            {buscaEstoque && (
+              <button type="button" onClick={() => setBuscaEstoque('')} title="limpar busca"
+                className="absolute right-2.5 top-2.5 text-stone-400 hover:text-stone-700"><X size={16} /></button>
+            )}
           </div>
+          {!buscaEstoque && (
+            <div className="flex gap-1.5 flex-wrap mb-3">
+              {['TODAS', ...CATEGORIAS].map(c => (
+                <button key={c} onClick={() => setCatFiltro(c)}
+                  className={`text-[11px] font-bold px-2.5 py-1 rounded-full border ${catFiltro === c ? 'bg-stone-800 text-white border-stone-800' : 'bg-white text-stone-500 border-stone-200'}`}>{c}</button>
+              ))}
+            </div>
+          )}
           {itens.length === 0 && <p className="text-sm text-stone-400 text-center py-6">Nenhum item cadastrado — comece pela aba Cadastro (contagem física + mínimo).</p>}
+          {(() => {
+            const palavras = buscaNorm(buscaEstoque).split(/\s+/).filter(Boolean);
+            const lista = palavras.length
+              ? itens.filter(i => { const d = buscaNorm(i.descricao); return palavras.every(p => d.includes(p)); })
+              : itens.filter(i => catFiltro === 'TODAS' || i.categoria === catFiltro);
+            // com poucos resultados, abre a FICHA de cada um: de onde vem o
+            // número (contagem + entradas − saídas) e a última retirada
+            const ficha = palavras.length > 0 && lista.length <= 8;
+            return (
           <div className="space-y-1">
-            {itens.filter(i => catFiltro === 'TODAS' || i.categoria === catFiltro).map(i => {
+            {palavras.length > 0 && (
+              <p className="text-[11px] text-stone-500 mb-1">
+                {lista.length === 0
+                  ? <>Nada no catálogo com “{buscaEstoque}”. Se o material existe, cadastre na aba <b>Cadastro</b>.</>
+                  : <>{lista.length} {lista.length === 1 ? 'item encontrado' : 'itens encontrados'}{ficha ? '' : ' — digite mais para ver o detalhe'}</>}
+              </p>
+            )}
+            {lista.map(i => {
               const s = saldoDe(i); const nv = nivelDe(i);
+              let det: React.ReactNode = null;
+              if (ficha) {
+                const desde = diaDaContagem(i);
+                const movs = movimentoPor[norm(i.descricao)] || [];
+                let ent = 0, sai = 0;
+                if (desde) for (const mv of movs) if (mv.data && mv.data >= desde) { if (mv.qtd > 0) ent += mv.qtd; else sai -= mv.qtd; }
+                const ult = saidas
+                  .filter(sd => norm(sd.descricao) === norm(i.descricao) && Number(sd.quantidade) > 0)
+                  .reduce<Saida | null>((a, b) => (!a || String(b.data) > String(a.data) ? b : a), null);
+                const dm = (d: string) => `${String(d).slice(8, 10)}/${String(d).slice(5, 7)}`;
+                const r = (n: number) => Math.round(n * 100) / 100;
+                det = (
+                  <div className="text-[11px] text-stone-500 pb-1.5 pl-1 leading-relaxed">
+                    {desde
+                      ? <>Contado em <b>{dm(desde)}</b>: {i.saldo_inicial} · entrou <b className="text-emerald-700">+{r(ent)}</b> · saiu <b className="text-red-600">−{r(sai)}</b> → <b className="text-stone-800">tem {r(s)} {i.unidade}</b></>
+                      : <>Nunca contado — sem contagem não há saldo. {podeContagemItem(i) ? 'Toque no 🧮 para contar.' : 'Peça a contagem à gestão.'}</>}
+                    {ult && <><br />Última retirada: <b>{dm(String(ult.data))}</b> · {ult.quantidade} {ult.unidade}{ult.escola ? ` → ${ult.escola}` : ''}{ult.os_ref ? ` (O.S. ${ult.os_ref})` : ''}</>}
+                  </div>
+                );
+              }
               return (
-                <div key={i.id} className="flex items-center gap-2 text-sm border-b border-stone-50 py-1.5">
+                <div key={i.id} className={ficha ? 'border-b border-stone-100' : ''}>
+                <div className={`flex items-center gap-2 text-sm py-1.5 ${ficha ? '' : 'border-b border-stone-50'}`}>
                   <span className="flex-1 min-w-0 truncate text-stone-700">{i.descricao}</span>
                   <span className="text-[10px] text-stone-400">{i.categoria}</span>
                   {/* v72: sem contagem física o número não é saldo, é só o
@@ -1453,9 +1602,13 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
                   <button onClick={() => excluirItem(i)} title="Excluir item do catálogo"
                       className="p-1 text-stone-300 hover:text-red-500 shrink-0"><Trash2 size={13} /></button>
                 </div>
+                {det}
+                </div>
               );
             })}
           </div>
+            );
+          })()}
         </div>
       )}
 
