@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { PackageMinus, PackagePlus, Save, Loader2, Trash2, Link2, Undo2, Pencil, Search, TrendingUp, BarChart3, Boxes, Wrench, Inbox, Camera, CheckCircle2, Siren, Construction } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { PackageMinus, PackagePlus, Save, Loader2, Trash2, Link2, Undo2, Pencil, Search, TrendingUp, BarChart3, Boxes, Wrench, Inbox, Camera, CheckCircle2, Siren, Construction, Plus, X } from 'lucide-react';
 import { supabase } from '../services/supabaseClient';
 import { osService } from '../services/osService';
 import { OSCampo, refDaOS, EXECUTOR_OPTIONS, buscaNorm } from '../types';
@@ -96,6 +96,14 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
   const [sub, setSub] = useState<SubAba>('stats');
   const [saida, setSaida] = useState<Saida>({ ...SAIDA_VAZIA });
   const [saidas, setSaidas] = useState<Saida[]>([]);
+  // v113 — CESTA (pedido do Renan 06/10). A saída era UM item por vez: para
+  // mandar 5 materiais na mesma escola o João repetia escola, O.S. e quem
+  // retirou cinco vezes. É por isso que a fila de "material declarado e ainda
+  // não saiu do estoque" chegou a 422 O.S. — o balcão não acompanha.
+  // Agora os itens se acumulam aqui e TUDO vai numa gravação só, dividindo
+  // data, origem, O.S., escola, contrato e retirante.
+  const [cesta, setCesta] = useState<{ descricao: string; quantidade: number; unidade: string }[]>([]);
+  const refMaterial = useRef<HTMLInputElement>(null);
   const [itens, setItens] = useState<ItemEstoque[]>([]);
   const [entradas, setEntradas] = useState<Entrada[]>([]);
   const [ferramentas, setFerramentas] = useState<Ferramenta[]>([]);
@@ -310,10 +318,50 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
   }, []);
   const [gerarOS, setGerarOS] = useState(false);
 
+  // v113: joga o material digitado na cesta e limpa material + quantidade
+  // (a unidade FICA, porque costuma se repetir na mesma retirada), deixando
+  // escola / O.S. / retirante como estão — que é o ponto de tudo isto.
+  const addNaCesta = () => {
+    const d = (saida.descricao || '').trim();
+    if (!d) { setMsg('Escreva o material antes de adicionar.'); return; }
+    if (!saida.quantidade || saida.quantidade <= 0) { setMsg('Quantidade precisa ser maior que zero.'); return; }
+    setCesta(c => [...c, { descricao: d, quantidade: saida.quantidade, unidade: saida.unidade }]);
+    setSaida(p => ({ ...p, descricao: '', quantidade: 1 }));
+    setMsg('');
+    setTimeout(() => refMaterial.current?.focus(), 0);
+  };
+
+  // v116 — TRAVA SÍNCRONA no Registrar saída (lição #4). O botão só fica
+  // `disabled` depois que o React redesenha: dois toques no mesmo frame
+  // passavam os DOIS — e com a cesta isso regrava a RETIRADA INTEIRA (e, com
+  // "gerar O.S.", nascem DUAS emergenciais). A v113.1 fechou a janela do fim
+  // da gravação; o ref fecha a do começo. Mesmo padrão do SALVAR da NovaOS.
+  const emGravar = useRef(false);
   const salvarSaida = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!saida.descricao.trim()) { setMsg('Escolha o material.'); return; }
-    if (!saida.quantidade || saida.quantidade <= 0) { setMsg('Quantidade precisa ser maior que zero.'); return; }
+    if (emGravar.current) return;
+    emGravar.current = true;
+    try { await salvarSaidaDeVerdade(); } finally { emGravar.current = false; setSalvando(false); }
+  };
+
+  const salvarSaidaDeVerdade = async () => {
+    // v113: o que vai gravar é a CESTA mais o que estiver digitado agora —
+    // assim ele pode somar 4 itens e salvar com o 5º ainda no campo, sem
+    // precisar lembrar de "adicionar" o último.
+    const itensSaida = [...cesta];
+    const digitado = (saida.descricao || '').trim();
+    if (digitado) {
+      // v113: nada de descartar calado. Se ele escreveu o material e deixou a
+      // quantidade em zero, a tela RECUSA — antes esse item simplesmente não
+      // era gravado e a mensagem de sucesso não dizia que ele ficou de fora.
+      if (!saida.quantidade || saida.quantidade <= 0) {
+        setMsg(`Quantidade de "${digitado}" precisa ser maior que zero — ou apague o material para salvar só a lista.`);
+        return;
+      }
+      itensSaida.push({ descricao: digitado, quantidade: saida.quantidade, unidade: saida.unidade });
+    }
+    if (itensSaida.length === 0) { setMsg('Escolha pelo menos um material.'); return; }
+    let gerouAgora = false;
     const dest = (saida.destinatario || '').trim();
     // REV 001 do gestor: TODA saída tem retirante — é ele que confirma no login
     if (!dest) { setMsg('Informe QUEM RETIROU — regra do gestor: toda saída tem confirmação no login de quem levou.'); return; }
@@ -348,17 +396,28 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
         classificacao: 'Emergencial', entrada: hoje(), conclusao: null,
         executor, status: 'Executando', medicao: '',
         solicitado: saida.obs || 'Emergência atendida no almoxarifado',
-        servico: '', materiais: `${saida.quantidade} ${saida.unidade} ${saida.descricao}`,
+        // v113: a O.S. emergencial nasce com a cesta INTEIRA nos materiais,
+        // não só com o último item digitado
+        servico: '', materiais: itensSaida.map(i => `${i.quantidade} ${i.unidade} ${i.descricao}`).join(' + '),
         memoria_calculo: '', foto_urls: []
       };
       const prefixo = PREFIXO_DEST[norm(dest)];
       const r = prefixo ? await osService.salvarEquipe(novaOS, prefixo) : await osService.salvar(novaOS);
       if (!r.ok || !r.os) { setSalvando(false); setMsg('Erro ao gerar a O.S.: ' + (r.erro || '?')); return; }
       osRef = refDaOS(r.os);
+      gerouAgora = true;
+      // v113: a O.S. já EXISTE no banco a partir daqui. Se o insert da saída
+      // falhar logo abaixo e ele tocar em salvar de novo, antes nascia uma
+      // SEGUNDA O.S. emergencial para a mesma retirada. Carimbando o número
+      // no formulário e desligando o gatilho, o retry reaproveita esta.
+      setGerarOS(false);
+      setSaida(p => ({ ...p, os_ref: osRef }));
       setSalvando(false);
     }
 
     setSalvando(true); setMsg('');
+    // v113: o cabeçalho é COMUM (data, origem, O.S., escola, retirante, obs,
+    // contrato) e cada item da cesta vira uma linha com esse mesmo cabeçalho
     const payload: any = { ...saida, os_ref: osRef, destinatario: dest || null };
     delete payload.id; delete payload.criado_em;
     payload.recebido = dest ? false : null;
@@ -378,19 +437,32 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
     // ninguém lembrar de marcar. O campo é editável na tela para o caso
     // ambíguo (Prefeitura, Casa da Criança, Galpão Recanto).
     payload.contrato = (saida as any).contrato || contratoDaUnidade(payload.escola || '');
-    let { error } = await supabase.from('saida_material').insert([payload]);
+    // v113: UMA LINHA POR ITEM, todas com o mesmo cabeçalho. Cada material
+    // continua sendo um registro próprio em saida_material (a medição/EMOP
+    // soma por descrição — se virasse uma linha com texto "3 un X + 2 kg Y"
+    // o consumo pararia de somar).
+    const linhasCom = (base: any) => itensSaida.map(i => ({
+      ...base, descricao: i.descricao, quantidade: i.quantidade, unidade: i.unidade
+    }));
+    let { error } = await supabase.from('saida_material').insert(linhasCom(payload));
     // banco sem as colunas novas (ALMOX-V2.sql / CONTRATO-SAIDA.sql pendente)
     // → salva sem elas em vez de perder a saída
     if (error && /contrato/i.test(error.message)) {
       delete payload.contrato;
-      ({ error } = await supabase.from('saida_material').insert([payload]));
+      ({ error } = await supabase.from('saida_material').insert(linhasCom(payload)));
     }
     if (error && /obs|destinatario|recebido/i.test(error.message)) {
       delete payload.obs; delete payload.destinatario; delete payload.recebido; delete payload.contrato;
-      ({ error } = await supabase.from('saida_material').insert([payload]));
+      ({ error } = await supabase.from('saida_material').insert(linhasCom(payload)));
     }
-    setSalvando(false);
-    if (error) { setMsg('Erro: ' + error.message); return; }
+    if (error) { setSalvando(false); setMsg('Erro: ' + error.message); return; }
+    // v113 — ORDEM IMPORTA. Antes o setSalvando(false) vinha AQUI, mas o
+    // trabalho por item (status da O.S. + cadastro + apelido) continua por
+    // mais alguns segundos abaixo. Com o botão reaberto e a cesta ainda
+    // cheia, um segundo toque regravava a RETIRADA INTEIRA. Agora a cesta
+    // esvazia assim que o insert passa (o laço abaixo usa itensSaida, que é
+    // cópia local) e o botão só reabre no fim.
+    setCesta([]);
 
     // SAIU MATERIAL = ESTÁ EXECUTANDO (regra Renan 10/07): O.S. Pendente
     // vinculada à saída muda de status sozinha — retirar material no
@@ -406,27 +478,42 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
 
     // REV002: material FORA do estoque → alerta + cadastro automático
     // com saldo NEGATIVO até a contagem real (gestão ajusta no 🧮)
-    let alertaCad = '';
-    const jaCadastrado = itens.some(i => norm(i.descricao) === norm(saida.descricao));
-    if (!jaCadastrado) {
-      const { error: ec } = await supabase.from('estoque_item').insert([{
-        descricao: saida.descricao.trim(), categoria: 'DIVERSOS',
-        unidade: saida.unidade, qtd_minima: 0, saldo_inicial: 0
-      }]);
-      if (!ec) alertaCad = ` ⚠️ item fora do estoque — CADASTRADO automático (saldo ficará NEGATIVO até a contagem da gestão).`;
-    }
-    // aprendizado de digitação (REV002): termo fora do catálogo vira sugestão
-    if (!MATERIAIS.some(m => norm(m) === norm(saida.descricao))) {
-      const dig = saida.descricao.trim();
-      const { data: ap } = await supabase.from('apelido_material').select('id,usos').eq('digitado', dig).limit(1);
-      if (ap && ap.length > 0) {
-        await supabase.from('apelido_material').update({ usos: (ap[0] as any).usos + 1 }).eq('id', (ap[0] as any).id);
-      } else {
-        await supabase.from('apelido_material').insert([{ digitado: dig, canonico: dig }]);
+    // v113: isto é POR ITEM — roda uma vez para cada material da cesta.
+    const cadastrados: string[] = [];
+    // v116: o mesmo material novo duas vezes na cesta (ex.: 2 linhas de
+    // SIFÃO) cadastrava DOIS itens no estoque — `itens` só recarrega no fim
+    const jaVisto = new Set<string>();
+    for (const it of itensSaida) {
+      const chave = norm(it.descricao);
+      const jaCadastrado = jaVisto.has(chave) || itens.some(i => norm(i.descricao) === chave);
+      jaVisto.add(chave);
+      if (!jaCadastrado) {
+        const { error: ec } = await supabase.from('estoque_item').insert([{
+          descricao: it.descricao, categoria: 'DIVERSOS',
+          unidade: it.unidade, qtd_minima: 0, saldo_inicial: 0
+        }]);
+        if (!ec) cadastrados.push(it.descricao);
+      }
+      // aprendizado de digitação (REV002): termo fora do catálogo vira sugestão
+      if (!MATERIAIS.some(m => norm(m) === norm(it.descricao))) {
+        const dig = it.descricao;
+        const { data: ap } = await supabase.from('apelido_material').select('id,usos').eq('digitado', dig).limit(1);
+        if (ap && ap.length > 0) {
+          await supabase.from('apelido_material').update({ usos: (ap[0] as any).usos + 1 }).eq('id', (ap[0] as any).id);
+        } else {
+          await supabase.from('apelido_material').insert([{ digitado: dig, canonico: dig }]);
+        }
       }
     }
+    const alertaCad = cadastrados.length
+      ? ` ⚠️ fora do estoque, CADASTRADO automático (saldo ficará NEGATIVO até a contagem da gestão): ${cadastrados.join(', ')}.`
+      : '';
 
-    setMsg(`✅ Saída: ${saida.quantidade} ${saida.unidade} ${saida.descricao}${osRef ? ' → O.S. ' + osRef : ''}${obsExtra ? ' ⚠️ SEM vínculo (nº anotado na obs)' : ''}${gerarOS && osRef ? ' 🚨 (O.S. emergencial GERADA agora)' : ''}${dest ? ` · aguardando ✓ de ${dest}` : ''}${avisoEscola}${alertaCad}${msgStatus}`);
+    const resumo = itensSaida.length === 1
+      ? `${itensSaida[0].quantidade} ${itensSaida[0].unidade} ${itensSaida[0].descricao}`
+      : `${itensSaida.length} itens (${itensSaida.map(i => `${i.quantidade} ${i.unidade} ${i.descricao}`).join(' · ')})`;
+    setSalvando(false);
+    setMsg(`✅ Saída: ${resumo}${osRef ? ' → O.S. ' + osRef : ''}${obsExtra ? ' ⚠️ SEM vínculo (nº anotado na obs)' : ''}${gerouAgora ? ' 🚨 (O.S. emergencial GERADA agora)' : ''}${dest ? ` · aguardando ✓ de ${dest}` : ''}${avisoEscola}${alertaCad}${msgStatus}`);
     setGerarOS(false);
     setSaida(p => ({ ...SAIDA_VAZIA, data: p.data, escola: p.escola, os_ref: osRef, origem: p.origem }));
     carregar();
@@ -471,8 +558,17 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
     setMsg(`Valores atuais de ${itemExistente.descricao} carregados — corrija e salve.`);
   };
 
+  // v116: mesma trava síncrona da saída — toque duplo aqui DOBRAVA a entrada
+  // e o saldo do estoque inteiro ficava errado até alguém editar
+  const emGravarEntrada = useRef(false);
   const salvarEntrada = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (emGravarEntrada.current) return;
+    emGravarEntrada.current = true;
+    try { await salvarEntradaDeVerdade(); } finally { emGravarEntrada.current = false; setSalvando(false); }
+  };
+
+  const salvarEntradaDeVerdade = async () => {
     if (!entrada.descricao.trim()) { setMsg('Informe o material da entrada.'); return; }
     setSalvando(true); setMsg('');
     let nf_url: string | null = null;
@@ -1018,6 +1114,18 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
                 {declaradasSemSaida.slice(0, 25).map(o => (
                   <button key={o.id} type="button"
                     onClick={() => {
+                      // v113: com a cesta cheia, trocar de O.S. aqui levaria os
+                      // itens já empilhados para OUTRA escola sem ele perceber —
+                      // é a mesma falha dos 48 materiais carimbados na unidade
+                      // errada que a auditoria achou. Pergunta antes.
+                      // conta também o que está DIGITADO: ele também seria gravado
+                      const pend = cesta.length + ((saida.descricao || '').trim() ? 1 : 0);
+                      if (pend > 0 && !confirm(
+                        `Você tem ${pend} ${pend === 1 ? 'item' : 'itens'} para lançar` +
+                        `${(saida.escola || '').trim() ? ` em ${saida.escola}` : ''}.\n\n` +
+                        `OK = esses itens passam para a O.S. ${refDaOS(o)} (${o.unidade})\n` +
+                        `Cancelar = volta e salva a retirada atual primeiro`
+                      )) return;
                       setSaida(p => ({ ...p, os_ref: refDaOS(o), escola: o.unidade, obs: `declarado na O.S.: ${(o.materiais || '').trim()}` }));
                       setMsg(`Saída pré-preenchida pela O.S. ${refDaOS(o)} — digite o item e a quantidade.`);
                       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1047,15 +1155,58 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
                 </select></div>
             </div>
             <div><label className="block text-[11px] font-bold uppercase text-stone-500 mb-1">Material (catálogo + aprendidos)</label>
-              <input list="materiais" value={saida.descricao} onChange={e => setSaida(p => ({ ...p, descricao: e.target.value }))} required placeholder="ex.: SIF… já completa SIFÃO" className={inputCls} /></div>
+              {/* v113: SEM required — com a cesta cheia o campo fica vazio de
+                  propósito, e o required travava o botão Registrar saída.
+                  A validação de "pelo menos um material" está no salvarSaida. */}
+              <input ref={refMaterial} list="materiais" value={saida.descricao}
+                onChange={e => setSaida(p => ({ ...p, descricao: e.target.value }))}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addNaCesta(); } }}
+                placeholder="ex.: SIF… já completa SIFÃO" className={inputCls} /></div>
             <div className="grid grid-cols-2 gap-3">
               <div><label className="block text-[11px] font-bold uppercase text-stone-500 mb-1">Quantidade</label>
-                <input type="number" step="0.01" min="0" value={saida.quantidade} onChange={e => setSaida(p => ({ ...p, quantidade: parseFloat(e.target.value) || 0 }))} className={inputCls} /></div>
+                <input type="number" step="0.01" min="0" value={saida.quantidade}
+                  onChange={e => setSaida(p => ({ ...p, quantidade: parseFloat(e.target.value) || 0 }))}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addNaCesta(); } }}
+                  className={inputCls} /></div>
               <div><label className="block text-[11px] font-bold uppercase text-stone-500 mb-1">Unidade</label>
                 <select value={saida.unidade} onChange={e => setSaida(p => ({ ...p, unidade: e.target.value }))} className={inputCls}>
                   {UNIDADES.map(u => <option key={u}>{u}</option>)}
                 </select></div>
             </div>
+
+            {/* ===== v113 (Renan 06/10): CESTA DE MATERIAIS =====
+                Uma retirada no balcão quase nunca é de um item só. Antes o
+                João tinha de salvar o formulário inteiro, ver a escola/O.S./
+                retirante voltarem e digitar tudo de novo por material. Agora
+                ele empilha os itens e salva UMA vez — o cabeçalho (data,
+                origem, O.S., unidade, quem retirou, contrato, obs) é comum e
+                cada item vira sua própria linha em saida_material. */}
+            <button type="button" onClick={addNaCesta}
+              className="w-full border-2 border-dashed border-fpv-300 text-fpv-700 font-bold py-2.5 rounded-xl text-sm flex items-center justify-center gap-2 hover:bg-fpv-50">
+              <Plus size={16} /> Adicionar este item e lançar outro
+            </button>
+
+            {cesta.length > 0 && (
+              <div className="bg-fpv-50/60 border border-fpv-200 rounded-xl p-3 space-y-1.5">
+                {/* o destino fica VISÍVEL o tempo todo: se ele trocar a escola
+                    ou a O.S. no meio da retirada, esta linha muda na cara dele */}
+                <p className="text-[11px] font-bold uppercase text-fpv-800">
+                  {cesta.length} {cesta.length === 1 ? 'item' : 'itens'} →{' '}
+                  {(saida.escola || '').trim() || <span className="text-amber-700">SEM UNIDADE</span>}
+                  {(saida.os_ref || '').trim() ? ` · O.S. ${saida.os_ref}` : ''}
+                </p>
+                {cesta.map((c, ix) => (
+                  <div key={`${c.descricao}-${ix}`} className="flex items-center gap-2 bg-white rounded-lg border border-fpv-100 px-2.5 py-1.5">
+                    <span className="flex-1 text-[13px] text-stone-800"><b>{c.quantidade} {c.unidade}</b> {c.descricao}</span>
+                    <button type="button" onClick={() => setCesta(l => l.filter((_, i2) => i2 !== ix))}
+                      className="text-red-500 shrink-0" title="tirar da lista"><X size={15} /></button>
+                  </div>
+                ))}
+                <p className="text-[11px] text-fpv-800/80">
+                  Todos vão com a mesma O.S., unidade, contrato e retirante. O que estiver escrito no campo acima também entra ao salvar.
+                </p>
+              </div>
+            )}
             <div><label className="block text-[11px] font-bold uppercase text-stone-500 mb-1"><Link2 size={11} className="inline mr-1" />O.S. vinculada (o coração do cruzamento)</label>
               <input list="refs-os" value={saida.os_ref} onChange={e => escolheuOS(e.target.value)} placeholder="nº oficial, L/M-nº ou F-nn — escolher puxa a escola" className="w-full border-2 border-fpv-100 rounded-lg px-3 py-2.5 text-sm bg-fpv-50/40 outline-none focus:border-fpv-500" />
               {/* chave pelo índice: o rótulo NÃO é único — o nº 1218 existe
@@ -1112,7 +1263,12 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
             <div><label className="block text-[11px] font-bold uppercase text-stone-500 mb-1">Observação (de onde veio, detalhe da origem…)</label>
               <input value={saida.obs || ''} onChange={e => setSaida(p => ({ ...p, obs: e.target.value }))} placeholder="ex.: comprado na Hidro Luz p/ emergência" className={inputCls} /></div>
             <button type="submit" disabled={salvando} className="w-full bg-fpv-500 hover:bg-fpv-600 text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 disabled:opacity-60">
-              {salvando ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />} Registrar saída
+              {salvando ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
+              {(() => {
+                // v113: o botão conta o que vai gravar (cesta + o que está digitado)
+                const n = cesta.length + (((saida.descricao || '').trim() && saida.quantidade > 0) ? 1 : 0);
+                return n > 1 ? `Registrar saída (${n} itens)` : 'Registrar saída';
+              })()}
             </button>
           </form>
 
