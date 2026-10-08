@@ -30,12 +30,14 @@ const STATUS_LEGENDA: Record<string, string> = {
 // Linha sem valor não aparece: O.S. sem área/local sai enxuta em vez de
 // sair com campo vazio.
 //
-//   *2190* — Concluída
+//   *OS 2190* — Concluída                (v119: "OS" no cabeçalho)
 //   Unidade: Creche M. Márcia Lustosa Machado
 //   Local: Cozinha                (só quando houver o dado)
 //   Tipo: HIDRÁULICA
 //   Criticidade: Emergencial
-//   Descrição: Manutenção na porta da sala de aula
+//   Executado: Troca de fechadura  (sem execução: "Descrição:" do fiscal)
+//   Quantificação: 1 fechadura     (v119: memória e/ou material utilizado)
+//   Executante: Leandro
 // LOCAL e TIPO quase nunca vêm preenchidos (a `area` está vazia na maioria
 // das O.S. e não existe campo de local). Como a descrição do fiscal quase
 // sempre diz — "MANUTENÇÃO NA COZINHA", "troca de torneira do banheiro" —
@@ -81,7 +83,9 @@ const deduz = (tabela: [RegExp, string][], ...textos: (string | null | undefined
 
 export const legendaOS = (os: OSCampo, med?: string, opts: { detalhado?: boolean } = {}): string => {
   const L: string[] = [];
-  L.push(`*${refDaOS(os)}* — ${STATUS_LEGENDA[os.status] || os.status}`);
+  // v119 (Leony 08/10): o cabeçalho diz "OS" — no grupo só o número solto
+  // ("*2708*") se confundia com nº de pedido/NF
+  L.push(`*OS ${refDaOS(os)}* — ${STATUS_LEGENDA[os.status] || os.status}`);
 
   // só entra na legenda o que tem CONTEÚDO: a equipe às vezes digita "." ou
   // "," só pra passar da validação de memória obrigatória, e isso ia pro
@@ -101,17 +105,26 @@ export const legendaOS = (os: OSCampo, med?: string, opts: { detalhado?: boolean
   // Tipo NUNCA fica vazio: sem disciplina identificada é "OUTROS SERVIÇOS"
   linha('Tipo', (os.area || deduz(TIPOS, ...textos) || 'OUTROS SERVIÇOS').toUpperCase());
   linha('Criticidade', String(os.classificacao || os.tipo || '').toUpperCase());
-  // Quantificação É a memória de cálculo (definição do Renan): "1 fechadura",
-  // "Vidro 18×26" — é o número que vira item EMOP na medição. Sem memória a
-  // linha não sai; NÃO cai em materiais, que é outra coisa (o que saiu do
-  // almoxarifado, não o que foi medido).
-  linha('Quantificação', os.memoria_calculo);
   // O modelo do grupo mostra só o que FOI FEITO. A descrição (pedido do
   // fiscal) só entra quando ainda não há execução — aí é o que temos.
   const pedido = String(os.solicitado ?? '').trim();
   const feito = String(os.servico ?? '').trim();
   if (feito) linha('Executado', feito);
   else linha('Descrição', pedido);
+  // v119 (regra do Leony 08/10) — QUANTIFICAÇÃO = memória de cálculo E/OU
+  // material utilizado, o que tiver. Até a v118 era SÓ a memória (definição
+  // do Renan) e a linha sumia nas emergenciais, que quase nunca têm memória —
+  // só o material, que é o próprio serviço descrito. Agora:
+  //   só memória → memória · só material → material · os dois → os dois.
+  // Vem DEPOIS do executado: primeiro o que foi feito, depois quanto.
+  const temTxt = (s: string) => /[a-zA-ZÀ-ÿ0-9]/.test(s);
+  const mc = String(os.memoria_calculo ?? '').trim();
+  const mat = String(os.materiais ?? '').trim();
+  const quant = [temTxt(mc) ? mc : '', temTxt(mat) ? mat : '']
+    .filter(Boolean)
+    .filter((v, i, a) => a.indexOf(v) === i)   // memória = material? não repete
+    .join(' · ');
+  linha('Quantificação', quant);
   linha('Executante', os.executor);
 
   // detalhe extra só quando pedido (gestão/medição) — no grupo o curto é melhor
