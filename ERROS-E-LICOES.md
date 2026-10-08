@@ -20,6 +20,9 @@ método AIOS: erro numerado nunca volta.
   passam os DOIS. A trava real é `useRef` + try/finally (share: v106; SALVAR
   só ganhou a dele na v113 — até lá o duplo-toque gravava DUAS O.S. com
   fictícios diferentes: F-113/F-114 em 01/09 e o caso Neilson de 28/09).
+  Almoxarifado (Registrar saída e Registrar entrada) só ganhou o ref na
+  v116 — com a CESTA da v113 do Renan, o duplo-toque regravaria a retirada
+  inteira. Regra: TODO botão que grava no banco usa ref + try/finally.
 - **#5 Campo digita o nº do papel.** Caso real: "79" digitado colidiu com a
   O.S. 79 oficial de janeiro. Guarda `numeroExiste()` bloqueia; gestor força
   com confirm (v29).
