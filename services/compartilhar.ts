@@ -124,6 +124,40 @@ export const legendaOS = (os: OSCampo, med?: string, opts: { detalhado?: boolean
   return L.join('\n');
 };
 
+// v118 (pedido do Leony/Marcio 08/10): SAÍDA DE MATERIAL no grupo, no mesmo
+// padrão das O.S. concluídas. O material sai do balcão e o grupo fica sabendo
+// o quê, para onde, em qual O.S. e com quem — a evidência da retirada ao lado
+// da evidência do serviço.
+//
+//   *Saída de material* — 08/10/2026
+//   Unidade: Escola M. Alberto Jorge
+//   O.S.: 2629
+//   Retirado por: Carlos Alberto
+//   Materiais:
+//   • 2 UND SIFÃO
+//   • 1 UND TORNEIRA
+export const legendaSaida = (s: {
+  data: string; escola?: string | null; os_ref?: string | null;
+  destinatario?: string | null; obs?: string | null; emergencialGerada?: boolean;
+  itens: { descricao: string; quantidade: number; unidade: string }[];
+}): string => {
+  const L: string[] = [`*Saída de material* — ${br(s.data)}`];
+  const linha = (rot: string, val?: string | null) => {
+    const v = String(val ?? '').trim();
+    if (v && /[a-zA-ZÀ-ÿ0-9]/.test(v)) L.push(`${rot}: ${v}`);
+  };
+  linha('Unidade', s.escola);
+  linha('O.S.', s.os_ref ? `${s.os_ref}${s.emergencialGerada ? ' (emergencial aberta no almoxarifado)' : ''}` : '');
+  linha('Retirado por', s.destinatario);
+  L.push(s.itens.length === 1 ? 'Material:' : 'Materiais:');
+  for (const i of s.itens) L.push(`• ${i.quantidade} ${i.unidade} ${i.descricao}`);
+  // a obs do vínculo automático ("declarado na O.S.: …", "[O.S. digitada…]")
+  // é controle interno do balcão — no grupo só entra a obs que o João escreveu
+  const obs = String(s.obs ?? '').trim();
+  if (obs && !/^declarado na O\.S\.|^\[O\.S\. digitada/i.test(obs)) linha('Obs', obs);
+  return L.join('\n');
+};
+
 // baixa as fotos do Storage e devolve como File[] pro share nativo.
 // Falha de rede em uma foto não derruba o compartilhamento: manda as
 // que vieram (a legenda já diz quantas deveriam ser).

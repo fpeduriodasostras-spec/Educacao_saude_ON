@@ -8,6 +8,7 @@ import { ESCOLAS, fiscalDaEscola } from '../data/escolas';
 import { UNIDADES_SAUDE, contratoDaUnidade } from '../data/unidadesSaude';
 import { EQUIPES, CORRETIVA } from '../config';
 import { hojeLocal } from '../config';
+import { enviarOS, legendaSaida, copiarLegenda, motivoDoUltimoErro } from '../services/compartilhar';
 
 // =============================================================
 // ALMOXARIFADO v2 (spec engenheiro REV 000) — painel do João:
@@ -115,6 +116,14 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
   const nfEnviada = useRef<{ arquivo: File; url: string } | null>(null);
   // v117 (pedido do Marcio 08/10): lupa no Estoque — "quanto tem de X?"
   const [buscaEstoque, setBuscaEstoque] = useState('');
+  // v118: COMPARTILHAR A SAÍDA no grupo, igual às O.S. concluídas. A foto do
+  // material fica SÓ no aparelho e vai direto para o WhatsApp — não sobe pro
+  // Storage (que está no limite). Sem download, a folha abre dentro do toque.
+  const [fotosSaida, setFotosSaida] = useState<File[]>([]);
+  const [shareSaida, setShareSaida] = useState<{ legenda: string; fotos: File[] } | null>(null);
+  const [msgShareSaida, setMsgShareSaida] = useState('');
+  const [legendaSaidaPendente, setLegendaSaidaPendente] = useState<string | null>(null);
+  const emShareSaida = useRef(false);
   const [itens, setItens] = useState<ItemEstoque[]>([]);
   const [entradas, setEntradas] = useState<Entrada[]>([]);
   const [ferramentas, setFerramentas] = useState<Ferramenta[]>([]);
@@ -525,6 +534,17 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
       : `${itensSaida.length} itens (${itensSaida.map(i => `${i.quantidade} ${i.unidade} ${i.descricao}`).join(' · ')})`;
     setSalvando(false);
     setMsg(`✅ Saída: ${resumo}${osRef ? ' → O.S. ' + osRef : ''}${obsExtra ? ' ⚠️ SEM vínculo (nº anotado na obs)' : ''}${gerouAgora ? ' 🚨 (O.S. emergencial GERADA agora)' : ''}${dest ? ` · aguardando ✓ de ${dest}` : ''}${avisoEscola}${alertaCad}${msgStatus}`);
+    // v118: a retirada GRAVADA vira cartão para o grupo — a legenda sai do que
+    // foi de fato para o banco (escola ajustada pela O.S., O.S. gerada agora)
+    // e a obs é só a que o João escreveu (sem o controle interno do vínculo)
+    setShareSaida({
+      legenda: legendaSaida({
+        data: payload.data, escola: payload.escola, os_ref: osRef, destinatario: dest,
+        obs: saida.obs, emergencialGerada: gerouAgora, itens: itensSaida,
+      }),
+      fotos: fotosSaida,
+    });
+    setFotosSaida([]); setMsgShareSaida(''); setLegendaSaidaPendente(null);
     setGerarOS(false);
     setSaida(p => ({ ...SAIDA_VAZIA, data: p.data, escola: p.escola, os_ref: osRef, origem: p.origem }));
     carregar();
@@ -1059,6 +1079,62 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
       )}
       {msg && <div className="text-sm font-medium text-fpv-700 bg-fpv-50 border border-fpv-100 rounded-lg px-3 py-2">{msg}</div>}
 
+      {/* ===== v118: COMPARTILHAR A SAÍDA NO GRUPO =====
+          Mesmo motor das O.S. concluídas (enviarOS): legenda vai SEMPRE junto
+          com as fotos, navegador de dentro do WhatsApp é avisado, e "está
+          copiada" só quando a cópia foi confirmada. As fotos já estão no
+          aparelho — nada a baixar, a folha abre dentro do toque. */}
+      {sub === 'saida' && shareSaida && (
+        <div className="bg-white border-2 border-fpv-200 rounded-2xl p-4 space-y-2.5">
+          <p className="text-[11px] font-bold uppercase text-fpv-800">Mandar esta saída no grupo</p>
+          <pre className="whitespace-pre-wrap text-[12px] text-stone-700 bg-stone-50 border border-stone-100 rounded-lg p-2.5 font-sans">{shareSaida.legenda}</pre>
+          <p className="text-[11px] text-stone-500">
+            {shareSaida.fotos.length ? `📷 vai com ${shareSaida.fotos.length} foto(s) do material` : 'Sem foto — vai só o texto. Para mandar com foto, tire a foto antes de registrar a próxima saída.'}
+          </p>
+          <div className="flex gap-2">
+            <button type="button" disabled={salvando}
+              onClick={async () => {
+                if (emShareSaida.current) return;      // lição #4: trava síncrona
+                emShareSaida.current = true;
+                setLegendaSaidaPendente(null);
+                const n = shareSaida.fotos.length;
+                let r: any = 'erro';
+                // nenhum await antes do enviarOS: a folha precisa abrir dentro do toque
+                try { r = await enviarOS(shareSaida.legenda, shareSaida.fotos, n); }
+                catch { r = 'erro'; }
+                finally { emShareSaida.current = false; }
+                const motivo = motivoDoUltimoErro() ? ` (motivo: ${motivoDoUltimoErro()})` : '';
+                setMsgShareSaida(
+                  r === 'compartilhado' ? (n ? `✔ enviado: cartão da saída + ${n} foto(s)` : '✔ enviado: cartão da saída') :
+                  r === 'compartilhado-parcial' ? '⚠️ foi o cartão e PARTE das fotos — este aparelho não aceita todas. Mande as que faltam pela galeria.' :
+                  r === 'compartilhado-sem-fotos' ? '⚠️ SÓ O TEXTO foi — as fotos não foram (o aparelho não aceita anexo). Mande as fotos pela galeria, no mesmo grupo.' :
+                  r === 'copiado' ? '📋 legenda copiada — cole no grupo' :
+                  r === 'navegador-embutido' ? '⚠️ NADA foi enviado: o app está aberto no navegador de DENTRO do WhatsApp. A saída está SALVA — abra o app pelo ÍCONE (ou ⋮ → "Abrir no Chrome") para compartilhar.' :
+                  r === 'erro-copiado' ? `❌ NADA foi enviado — o aparelho recusou. A legenda está copiada: cole no grupo e mande as fotos pela galeria.${motivo}` :
+                  r === 'cancelado' ? '' :
+                  `❌ NADA foi enviado e a legenda NÃO foi copiada. Toque em COPIAR LEGENDA abaixo e cole no grupo.${motivo}`
+                );
+                if (r === 'erro') setLegendaSaidaPendente(shareSaida.legenda);
+                // só some sozinho quando foi tudo
+                if (r === 'compartilhado') setTimeout(() => { setShareSaida(null); setMsgShareSaida(''); }, 1500);
+              }}
+              className="flex-1 bg-fpv-600 active:bg-fpv-700 disabled:bg-stone-300 text-white font-bold py-2.5 rounded-xl text-sm">
+              📤 Compartilhar no grupo
+            </button>
+            <button type="button" onClick={() => { setShareSaida(null); setMsgShareSaida(''); setLegendaSaidaPendente(null); }}
+              className="px-4 border border-stone-200 text-stone-600 font-bold py-2.5 rounded-xl text-sm">Fechar</button>
+          </div>
+          {msgShareSaida && <p className="text-[12px] font-medium text-stone-700">{msgShareSaida}</p>}
+          {legendaSaidaPendente && (
+            <button type="button"
+              onClick={async () => setMsgShareSaida((await copiarLegenda(legendaSaidaPendente))
+                ? '📋 legenda copiada — cole no grupo e mande as fotos pela galeria'
+                : '❌ o aparelho não deixou copiar — segure o dedo no texto acima e copie à mão')}
+              className="w-full border border-fpv-200 text-fpv-700 font-bold py-2 rounded-xl text-sm">COPIAR LEGENDA</button>
+          )}
+        </div>
+      )}
+
       {/* datalist GLOBAL (REV002): catálogo + estoque + termos aprendidos,
           disponível em TODAS as funções do almoxarifado */}
       <datalist id="materiais">{VOCABULARIO.map(m => <option key={m} value={m} />)}</datalist>
@@ -1316,6 +1392,25 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
             })()}
             <div><label className="block text-[11px] font-bold uppercase text-stone-500 mb-1">Observação (de onde veio, detalhe da origem…)</label>
               <input value={saida.obs || ''} onChange={e => setSaida(p => ({ ...p, obs: e.target.value }))} placeholder="ex.: comprado na Hidro Luz p/ emergência" className={inputCls} /></div>
+            {/* v118: foto do material retirado — vai SÓ para o grupo junto com
+                o cartão da saída (não fica salva no app: o Storage está cheio) */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <label className="flex items-center gap-2 text-sm font-bold text-fpv-700 bg-fpv-50 border border-fpv-100 px-4 py-2.5 rounded-lg cursor-pointer w-fit">
+                <Camera size={16} /> {fotosSaida.length ? `📷 ${fotosSaida.length} foto(s) do material` : 'Foto do material (p/ o grupo)'}
+                <input type="file" accept="image/*" multiple className="hidden"
+                  onChange={e => {
+                    // lição #6: snapshot ANTES de limpar o input
+                    const fs = Array.from(e.target.files || []);
+                    e.target.value = '';
+                    if (fs.length) setFotosSaida(p => [...p, ...fs].slice(0, 10));
+                  }} />
+              </label>
+              {fotosSaida.length > 0 && (
+                <button type="button" onClick={() => setFotosSaida([])} className="text-[11px] font-bold text-red-600 flex items-center gap-1">
+                  <X size={13} /> tirar fotos
+                </button>
+              )}
+            </div>
             <button type="submit" disabled={salvando} className="w-full bg-fpv-500 hover:bg-fpv-600 text-white font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 disabled:opacity-60">
               {salvando ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
               {(() => {
