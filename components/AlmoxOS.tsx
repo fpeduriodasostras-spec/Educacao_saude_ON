@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { PackageMinus, PackagePlus, Save, Loader2, Trash2, Link2, Undo2, Pencil, Search, TrendingUp, BarChart3, Boxes, Wrench, Inbox, Camera, CheckCircle2, Siren, Construction, Plus, X } from 'lucide-react';
+import { PackageMinus, PackagePlus, Save, Loader2, Trash2, Link2, Undo2, Pencil, Search, TrendingUp, BarChart3, Boxes, Wrench, Inbox, Camera, CheckCircle2, Siren, Construction, Plus, X, Zap } from 'lucide-react';
 import { supabase } from '../services/supabaseClient';
 import { osService } from '../services/osService';
 import { OSCampo, refDaOS, EXECUTOR_OPTIONS, buscaNorm } from '../types';
@@ -91,7 +91,27 @@ const SAIDA_VAZIA: Saida = { data: hoje(), descricao: '', quantidade: 1, unidade
 const ITEM_VAZIO: ItemEstoque = { descricao: '', categoria: 'DIVERSOS', unidade: 'UND', qtd_minima: 0, saldo_inicial: 0 };
 const ENTRADA_VAZIA: Entrada = { data: hoje(), descricao: '', quantidade: 1, unidade: 'UND', origem: 'COMPRA', obs: '' };
 
-type SubAba = 'stats' | 'saida' | 'cadastro' | 'estoque' | 'ferramentas' | 'andaime' | 'solicitacoes';
+type SubAba = 'stats' | 'saida' | 'cadastro' | 'estoque' | 'ferramentas' | 'eletricas' | 'andaime' | 'solicitacoes';
+
+// v121 (pedido do Leony 09/10): FERRAMENTAS ELÉTRICAS ganham aba própria —
+// "quantas tem e onde estão" sem rolar a lista inteira de ferramentas.
+// A tabela `ferramenta` não tem campo de tipo, então a separação é PELO
+// NOME (sem mexer no banco): máquinas elétricas/a bateria, instrumentos de
+// medição elétrica, marcas de ferramenta elétrica e, para o que escapar,
+// qualquer nome com "ELÉTRICA/ELÉTRICO" — escrever isso no nome (lápis)
+// força o item para a aba. Régua da busca (buscaNorm): sem acento e com
+// letra dobrada colapsada — por isso "sera" (serra) e "compresor".
+const RE_ELETRICA = new RegExp([
+  'furadeira', 'parafusadeira', 'martelete', 'rompedor', 'demolidor',
+  'esmerilhadeira', 'esmeril', 'lixadeira', 'politriz', 'retifica', 'tupia', 'plaina',
+  'policorte', 'sera (circular|marmore|tico|sabre|bancada|meia|eletric)', 'tico.?tico',
+  'soprador', 'pistola (de )?calor', 'cola quente', 'ferro de solda', 'maquina de solda', 'inversora',
+  'multimetro', 'amperimetro', 'detector de tensao', 'testador',
+  'compresor', 'gerador', 'lavadora', '\\bwap\\b', 'aspirador', 'betoneira', 'vibrador',
+  'bateria', 'carregador', 'extensao', 'eletric',
+  'makita', 'maquita', 'dewalt', 'bosch', '\\bskil\\b', 'black.?decker', 'hitachi', 'metabo', 'milwauke', 'einhel',
+].join('|'));
+const ehEletrica = (descricao: string) => RE_ELETRICA.test(buscaNorm(descricao || ''));
 
 const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: string }> = ({ listaOS, ehGestor = false, usuario = '' }) => {
   const [sub, setSub] = useState<SubAba>('stats');
@@ -116,6 +136,8 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
   const nfEnviada = useRef<{ arquivo: File; url: string } | null>(null);
   // v117 (pedido do Marcio 08/10): lupa no Estoque — "quanto tem de X?"
   const [buscaEstoque, setBuscaEstoque] = useState('');
+  // v121: lupa nas abas Ferramentas e Elétricas (zera ao trocar de aba)
+  const [buscaFerr, setBuscaFerr] = useState('');
   // v118: COMPARTILHAR A SAÍDA no grupo, igual às O.S. concluídas. A foto do
   // material fica SÓ no aparelho e vai direto para o WhatsApp — não sobe pro
   // Storage (que está no limite). Sem download, a folha abre dentro do toque.
@@ -693,9 +715,14 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
     setEntradaEdit(null); carregar();
   };
 
-  const criarFerramenta = async () => {
+  // v121: cadastrada pela aba ELÉTRICAS e com nome que a régua não reconhece
+  // ("MAQUITA AZUL")? leva " (ELÉTRICA)" no nome — senão sumiria desta aba e
+  // apareceria em Ferramentas logo depois de salvar
+  const criarFerramenta = async (eletrica = false) => {
     if (!novaFerr.descricao.trim()) return;
-    const { error } = await supabase.from('ferramenta').insert([{ descricao: novaFerr.descricao, quantidade: novaFerr.quantidade }]);
+    let descricao = novaFerr.descricao.trim();
+    if (eletrica && !ehEletrica(descricao)) descricao += ' (ELÉTRICA)';
+    const { error } = await supabase.from('ferramenta').insert([{ descricao, quantidade: novaFerr.quantidade }]);
     if (error) { setMsg(/ferramenta/.test(error.message) ? '⚠️ Rode o ALMOX-V2.sql primeiro.' : 'Erro: ' + error.message); return; }
     setNovaFerr({ descricao: '', quantidade: 1 }); carregar();
   };
@@ -1000,7 +1027,7 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
 
   const inputCls = 'w-full border border-stone-200 rounded-lg px-3 py-2.5 text-sm bg-stone-50 outline-none focus:border-fpv-500';
   const SubBtn = ({ id, icon: Icon, rot, badge }: { id: SubAba; icon: any; rot: string; badge?: number }) => (
-    <button onClick={() => setSub(id)}
+    <button onClick={() => { setSub(id); setBuscaFerr(''); }}
       className={`flex items-center gap-1.5 text-xs font-bold px-3 py-2 rounded-full border whitespace-nowrap ${sub === id ? 'bg-fpv-600 text-white border-fpv-600' : 'bg-white text-stone-600 border-stone-200'}`}>
       <Icon size={13} /> {rot}
       {badge != null && badge > 0 && <span className={`text-[10px] rounded-full px-1.5 ${sub === id ? 'bg-white text-fpv-700' : 'bg-red-600 text-white'}`}>{badge}</span>}
@@ -1068,6 +1095,7 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
         <SubBtn id="cadastro" icon={PackagePlus} rot="Cadastro" />
         <SubBtn id="estoque" icon={Boxes} rot="Estoque" />
         <SubBtn id="ferramentas" icon={Wrench} rot="Ferramentas" />
+        <SubBtn id="eletricas" icon={Zap} rot="Elétricas" />
         <SubBtn id="andaime" icon={Construction} rot="Andaime" />
         <SubBtn id="solicitacoes" icon={Inbox} rot="Pedidos" badge={pedidosAbertos.length} />
       </div>
@@ -1707,88 +1735,139 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
         </div>
       )}
 
-      {/* ============ FERRAMENTAS ============ */}
-      {sub === 'ferramentas' && (
-        <div className="bg-white rounded-2xl border border-stone-200 shadow-sm p-5 space-y-3">
-          <h2 className="font-bold text-stone-900 text-sm">Ferramentas — quem está com o quê, em qual obra</h2>
-          <div className="flex gap-2">
-            <input value={novaFerr.descricao} onChange={e => setNovaFerr(p => ({ ...p, descricao: e.target.value }))} placeholder="ex.: MARTELETE BOSCH" className={inputCls} />
-            <input type="number" min="1" value={novaFerr.quantidade} onChange={e => setNovaFerr(p => ({ ...p, quantidade: parseFloat(e.target.value) || 1 }))} className="w-20 border border-stone-200 rounded-lg px-3 py-2.5 text-sm bg-stone-50 outline-none focus:border-fpv-500" />
-            <button onClick={criarFerramenta} className="bg-fpv-500 hover:bg-fpv-600 text-white font-bold px-4 rounded-xl text-sm">＋</button>
-          </div>
-          {ferramentas.length === 0 && <p className="text-sm text-stone-400 text-center py-4">Nenhuma ferramenta cadastrada.</p>}
-          {/* REV 001 do gestor: listagem POR RESPONSÁVEL (tópicos) */}
-          {(() => {
-            const linha = (f: Ferramenta) => {
-              const osRef = (f.obs || '').replace(/^O\.S\.\s*/i, '').trim();
-              const osVinc = osRef ? listaOS.find(o => refDaOS(o) === osRef) : undefined;
-              const aberta = ferrAberta === f.id;
-              return (
-                <div key={f.id} className={`border rounded-xl px-3 py-2 text-sm ${f.status === 'EM CAMPO' ? 'border-amber-200 bg-amber-50/50' : 'border-stone-100'}`}>
-                  <div className="flex items-center gap-2">
-                    <button type="button" onClick={() => setFerrAberta(aberta ? null : (f.id ?? null))} className="flex-1 min-w-0 text-left truncate">
-                      <b>{f.quantidade > 1 ? f.quantidade + '× ' : ''}{f.descricao}</b>
-                      {f.status === 'EM CAMPO' && (
-                        osRef
-                          ? <span className="text-[11px] font-bold text-fpv-700"> · O.S. {osRef}</span>
-                          : <span className="text-[11px] font-bold text-amber-700"> · SEM O.S. vinculada</span>
-                      )}
-                      <span className="text-[10px] text-stone-400"> {aberta ? '▲' : '▼'}</span>
-                    </button>
-                    <button onClick={() => editarFerr(f)} title="Corrigir modelo/quantidade (e vínculo, se em campo)"
-                      className="p-1 text-stone-300 hover:text-fpv-600 shrink-0"><Pencil size={13} /></button>
-                    <button onClick={() => excluirFerr(f)} title="Apagar cadastro errado"
-                      className="p-1 text-stone-300 hover:text-red-500 shrink-0"><Trash2 size={13} /></button>
-                    {f.status === 'ESTOQUE'
-                      ? <button onClick={() => entregarFerr(f)} className="text-[11px] font-bold text-fpv-700 bg-fpv-50 border border-fpv-100 rounded-full px-3 py-1 shrink-0">entregar →</button>
-                      : <button onClick={() => receberFerr(f)} className="text-[11px] font-bold text-amber-800 bg-amber-100 border border-amber-200 rounded-full px-3 py-1 shrink-0">← voltou</button>}
-                  </div>
-                  {/* a FICHA: onde a ferramenta foi parar (pedido Renan 06/07) */}
-                  {aberta && (
-                    <div className="mt-1.5 pt-1.5 border-t border-amber-100 text-[11px] text-stone-600 space-y-0.5">
-                      {f.status === 'EM CAMPO' ? (
-                        <>
-                          <p>👷 Com: <b>{f.com_quem || '—'}</b></p>
-                          <p>📍 Obra: <b>{f.obra || '— (toque no lápis p/ preencher)'}</b></p>
-                          <p>🔗 O.S.: <b className={osRef ? 'text-fpv-700' : 'text-amber-700'}>{osRef || 'SEM VÍNCULO (toque no lápis)'}</b>{osVinc ? <span className="text-stone-500"> — {osVinc.unidade} · {osVinc.status}</span> : ''}</p>
-                          <p>📅 Em campo desde: {f.desde ? f.desde.split('-').reverse().join('/') : '—'}</p>
-                        </>
-                      ) : (
-                        <p>📦 No estoque do almoxarifado — disponível, sem vínculo com O.S.</p>
-                      )}
-                    </div>
+      {/* ============ FERRAMENTAS (manuais) e ⚡ ELÉTRICAS (v121) ============
+          Mesmo painel para as duas abas — a diferença é QUAIS ferramentas
+          entram (ehEletrica pelo nome). Entregar/voltou/lápis/lixeira, placar,
+          saldo por família e agrupamento por responsável são os de sempre. */}
+      {(sub === 'ferramentas' || sub === 'eletricas') && (() => {
+        const abaEletrica = sub === 'eletricas';
+        const unid = (fs: Ferramenta[]) => fs.reduce((t, f) => t + Number(f.quantidade || 1), 0);
+        const daAba = ferramentas.filter(f => ehEletrica(f.descricao) === abaEletrica);
+        const qtdEletricas = unid(ferramentas.filter(f => ehEletrica(f.descricao)));
+        // v121: LUPA — nome, com quem, obra e O.S.; várias palavras, todas
+        // precisam aparecer ("furadeira leandro"). Placar e saldo passam a
+        // contar SÓ o que a busca achou: "quantas furadeiras e onde estão".
+        const palavrasF = buscaNorm(buscaFerr).split(/\s+/).filter(Boolean);
+        const visiveis = palavrasF.length
+          ? daAba.filter(f => {
+              const t = buscaNorm([f.descricao, f.com_quem, f.obra, f.obs].filter(Boolean).join(' '));
+              return palavrasF.every(p => t.includes(p));
+            })
+          : daAba;
+        const linha = (f: Ferramenta) => {
+          const osRef = (f.obs || '').replace(/^O\.S\.\s*/i, '').trim();
+          const osVinc = osRef ? listaOS.find(o => refDaOS(o) === osRef) : undefined;
+          const aberta = ferrAberta === f.id;
+          return (
+            <div key={f.id} className={`border rounded-xl px-3 py-2 text-sm ${f.status === 'EM CAMPO' ? 'border-amber-200 bg-amber-50/50' : 'border-stone-100'}`}>
+              <div className="flex items-center gap-2">
+                <button type="button" onClick={() => setFerrAberta(aberta ? null : (f.id ?? null))} className="flex-1 min-w-0 text-left truncate">
+                  <b>{f.quantidade > 1 ? f.quantidade + '× ' : ''}{f.descricao}</b>
+                  {f.status === 'EM CAMPO' && (
+                    osRef
+                      ? <span className="text-[11px] font-bold text-fpv-700"> · O.S. {osRef}</span>
+                      : <span className="text-[11px] font-bold text-amber-700"> · SEM O.S. vinculada</span>
+                  )}
+                  <span className="text-[10px] text-stone-400"> {aberta ? '▲' : '▼'}</span>
+                </button>
+                <button onClick={() => editarFerr(f)} title="Corrigir modelo/quantidade (e vínculo, se em campo)"
+                  className="p-1 text-stone-300 hover:text-fpv-600 shrink-0"><Pencil size={13} /></button>
+                <button onClick={() => excluirFerr(f)} title="Apagar cadastro errado"
+                  className="p-1 text-stone-300 hover:text-red-500 shrink-0"><Trash2 size={13} /></button>
+                {f.status === 'ESTOQUE'
+                  ? <button onClick={() => entregarFerr(f)} className="text-[11px] font-bold text-fpv-700 bg-fpv-50 border border-fpv-100 rounded-full px-3 py-1 shrink-0">entregar →</button>
+                  : <button onClick={() => receberFerr(f)} className="text-[11px] font-bold text-amber-800 bg-amber-100 border border-amber-200 rounded-full px-3 py-1 shrink-0">← voltou</button>}
+              </div>
+              {/* a FICHA: onde a ferramenta foi parar (pedido Renan 06/07) */}
+              {aberta && (
+                <div className="mt-1.5 pt-1.5 border-t border-amber-100 text-[11px] text-stone-600 space-y-0.5">
+                  {f.status === 'EM CAMPO' ? (
+                    <>
+                      <p>👷 Com: <b>{f.com_quem || '—'}</b></p>
+                      <p>📍 Obra: <b>{f.obra || '— (toque no lápis p/ preencher)'}</b></p>
+                      <p>🔗 O.S.: <b className={osRef ? 'text-fpv-700' : 'text-amber-700'}>{osRef || 'SEM VÍNCULO (toque no lápis)'}</b>{osVinc ? <span className="text-stone-500"> — {osVinc.unidade} · {osVinc.status}</span> : ''}</p>
+                      <p>📅 Em campo desde: {f.desde ? f.desde.split('-').reverse().join('/') : '—'}</p>
+                    </>
+                  ) : (
+                    <p>📦 No estoque do almoxarifado — disponível, sem vínculo com O.S.</p>
                   )}
                 </div>
-              );
-            };
-            const emCampo = ferramentas.filter(f => f.status === 'EM CAMPO');
-            const noEstoque = ferramentas.filter(f => f.status !== 'EM CAMPO');
-            // PLACAR DE SALDO (pedido João 17/08): a tela listava mas não SOMAVA —
-            // "saldo não constou". Soma por UNIDADE (quantidade), não por cadastro:
-            // carrinho de mão 4x conta 4. +7 dias em campo = cobrar devolução.
-            const unid = (fs: Ferramenta[]) => fs.reduce((t, f) => t + Number(f.quantidade || 1), 0);
-            // T12:00 evita o off-by-one de fuso ao parsear data pura (padrão hojeLocal)
-            const fora7 = emCampo.filter(f => f.desde && (Date.now() - new Date(f.desde + 'T12:00:00').getTime()) / 86400000 >= 7);
-            // SALDO UNITÁRIO POR FERRAMENTA (pedido Renan 17/08): o João numera os
-            // itens ("SERRA MÁRMORE 01/02/03") — aqui a numeração final vira uma
-            // FAMÍLIA só, com o saldo ao lado: quantas no estoque / total / em campo.
-            // O sufixo removido é apenas "número (+1 letra)" no FIM: "MARTELETE 5KG"
-            // e "ESCADA 7 DEGRAUS" não são tocados.
-            const familia = (d: string) => d.trim().toUpperCase().replace(/\s+\d+\s*[A-ZÀ-Ü]?$/, '').replace(/\s{2,}/g, ' ').trim() || d.trim().toUpperCase();
-            const familias: Record<string, { total: number; campo: number }> = {};
-            for (const f of ferramentas) {
-              const k = familia(f.descricao);
-              const q = Number(f.quantidade || 1);
-              (familias[k] = familias[k] || { total: 0, campo: 0 }).total += q;
-              if (f.status === 'EM CAMPO') familias[k].campo += q;
-            }
-            const grupos: Record<string, Ferramenta[]> = {};
-            for (const f of emCampo) { const k = (f.com_quem || 'Sem responsável').trim(); (grupos[k] = grupos[k] || []).push(f); }
-            return (
+              )}
+            </div>
+          );
+        };
+        const emCampo = visiveis.filter(f => f.status === 'EM CAMPO');
+        const noEstoque = visiveis.filter(f => f.status !== 'EM CAMPO');
+        // PLACAR DE SALDO (pedido João 17/08): a tela listava mas não SOMAVA —
+        // "saldo não constou". Soma por UNIDADE (quantidade), não por cadastro:
+        // carrinho de mão 4x conta 4. +7 dias em campo = cobrar devolução.
+        // T12:00 evita o off-by-one de fuso ao parsear data pura (padrão hojeLocal)
+        const fora7 = emCampo.filter(f => f.desde && (Date.now() - new Date(f.desde + 'T12:00:00').getTime()) / 86400000 >= 7);
+        // SALDO UNITÁRIO POR FERRAMENTA (pedido Renan 17/08): o João numera os
+        // itens ("SERRA MÁRMORE 01/02/03") — aqui a numeração final vira uma
+        // FAMÍLIA só, com o saldo ao lado: quantas no estoque / total / em campo.
+        // O sufixo removido é apenas "número (+1 letra)" no FIM: "MARTELETE 5KG"
+        // e "ESCADA 7 DEGRAUS" não são tocados.
+        // v121: a família também diz ONDE estão as que saíram (com quem · obra · O.S.)
+        const familia = (d: string) => d.trim().toUpperCase().replace(/\s+\d+\s*[A-ZÀ-Ü]?$/, '').replace(/\s{2,}/g, ' ').trim() || d.trim().toUpperCase();
+        const familias: Record<string, { total: number; campo: number; onde: string[] }> = {};
+        for (const f of visiveis) {
+          const k = familia(f.descricao);
+          const q = Number(f.quantidade || 1);
+          const fam = (familias[k] = familias[k] || { total: 0, campo: 0, onde: [] });
+          fam.total += q;
+          if (f.status === 'EM CAMPO') {
+            fam.campo += q;
+            const osRef = (f.obs || '').replace(/^O\.S\.\s*/i, '').trim();
+            const obra = (f.obra || '').trim();
+            fam.onde.push(`${q > 1 ? q + '× ' : ''}${(f.com_quem || '?').trim()}${obra ? ' · ' + obra : ''}${osRef ? ' · O.S. ' + osRef : ''}`);
+          }
+        }
+        const grupos: Record<string, Ferramenta[]> = {};
+        for (const f of emCampo) { const k = (f.com_quem || 'Sem responsável').trim(); (grupos[k] = grupos[k] || []).push(f); }
+        return (
+          <div className="bg-white rounded-2xl border border-stone-200 shadow-sm p-5 space-y-3">
+            <h2 className="font-bold text-stone-900 text-sm">
+              {abaEletrica ? '⚡ Ferramentas elétricas — quantas tem e onde estão' : 'Ferramentas — quem está com o quê, em qual obra'}
+            </h2>
+            {!abaEletrica && qtdEletricas > 0 && (
+              <p className="text-[11px] text-stone-500 -mt-1">
+                ⚡ {qtdEletricas} ferramenta(s) elétrica(s) ficam na aba{' '}
+                <button type="button" onClick={() => { setSub('eletricas'); setBuscaFerr(''); }} className="font-bold text-fpv-700 underline">Elétricas</button>.
+              </p>
+            )}
+            <div className="flex gap-2">
+              <input value={novaFerr.descricao} onChange={e => setNovaFerr(p => ({ ...p, descricao: e.target.value }))}
+                placeholder={abaEletrica ? 'ex.: FURADEIRA BOSCH' : 'ex.: CARRINHO DE MÃO'} className={inputCls} />
+              <input type="number" min="1" value={novaFerr.quantidade} onChange={e => setNovaFerr(p => ({ ...p, quantidade: parseFloat(e.target.value) || 1 }))} className="w-20 border border-stone-200 rounded-lg px-3 py-2.5 text-sm bg-stone-50 outline-none focus:border-fpv-500" />
+              {/* v121: () => — passar a função direto mandaria o EVENTO do
+                  clique como "eletrica" e toda ferramenta nasceria elétrica */}
+              <button onClick={() => criarFerramenta(abaEletrica)} className="bg-fpv-500 hover:bg-fpv-600 text-white font-bold px-4 rounded-xl text-sm">＋</button>
+            </div>
+            {abaEletrica && (
+              <p className="text-[11px] text-stone-500 -mt-1">
+                Entra aqui pelo nome: furadeira, martelete, esmerilhadeira, serra mármore/circular, parafusadeira, lixadeira, soprador, multímetro, Makita, Bosch, DeWalt… Alguma não apareceu? Toque no lápis dela (aba Ferramentas) e inclua <b>ELÉTRICA</b> no nome.
+              </p>
+            )}
+            <div className="relative">
+              <Search size={15} className="absolute left-3 top-3 text-stone-400" />
+              <input value={buscaFerr} onChange={e => setBuscaFerr(e.target.value)}
+                placeholder={abaEletrica ? 'procurar (ex.: furadeira, martelete leandro)…' : 'procurar ferramenta, pessoa ou obra…'}
+                className="w-full pl-9 pr-9 py-2.5 text-sm border border-stone-200 rounded-lg bg-stone-50 outline-none focus:border-fpv-500" />
+              {buscaFerr && (
+                <button type="button" onClick={() => setBuscaFerr('')} title="limpar busca"
+                  className="absolute right-2.5 top-2.5 text-stone-400 hover:text-stone-700"><X size={16} /></button>
+              )}
+            </div>
+            {daAba.length === 0 && <p className="text-sm text-stone-400 text-center py-4">Nenhuma ferramenta {abaEletrica ? 'elétrica ' : ''}cadastrada.</p>}
+            {daAba.length > 0 && visiveis.length === 0 && (
+              <p className="text-sm text-stone-400 text-center py-4">Nada com “{buscaFerr}”{abaEletrica ? ' entre as elétricas' : ''}.</p>
+            )}
+            {visiveis.length > 0 && (
               <div className="space-y-3">
                 <div className="grid grid-cols-3 gap-2 text-center">
                   <div className="bg-stone-50 border border-stone-200 rounded-xl py-2">
-                    <div className="text-lg font-bold text-stone-800">{unid(ferramentas)}</div>
+                    <div className="text-lg font-bold text-stone-800">{unid(visiveis)}</div>
                     <div className="text-[10px] text-stone-500 font-medium">UNIDADES NO TOTAL</div>
                   </div>
                   <div className="bg-amber-50 border border-amber-200 rounded-xl py-2">
@@ -1806,24 +1885,27 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
                   </p>
                 )}
                 {/* saldo de cada ferramenta ao lado do nome — rolagem rápida do João */}
-                {Object.keys(familias).length > 0 && (
-                  <div>
-                    <div className="text-xs font-bold text-stone-500 mb-1.5">📊 Saldo por ferramenta</div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
-                      {Object.entries(familias).sort((a, b) => a[0].localeCompare(b[0])).map(([nome, s]) => (
-                        <div key={nome} className="flex items-center justify-between gap-2 border border-stone-100 rounded-lg px-2.5 py-1 text-[12px]">
+                <div>
+                  <div className="text-xs font-bold text-stone-500 mb-1.5">📊 Saldo por ferramenta</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+                    {Object.entries(familias).sort((a, b) => a[0].localeCompare(b[0])).map(([nome, s]) => (
+                      <div key={nome} className="border border-stone-100 rounded-lg px-2.5 py-1 text-[12px]">
+                        <div className="flex items-center justify-between gap-2">
                           <span className="truncate font-medium text-stone-700">{nome}</span>
                           <span className={`shrink-0 font-bold ${s.total - s.campo === 0 ? 'text-amber-700' : 'text-fpv-700'}`}>
                             {s.total - s.campo}/{s.total} no estoque{s.campo > 0 ? ` · ${s.campo} em campo` : ''}
                           </span>
                         </div>
-                      ))}
-                    </div>
+                        {s.onde.length > 0 && (
+                          <div className="text-[11px] text-amber-800 leading-snug">📍 {s.onde.join(' | ')}</div>
+                        )}
+                      </div>
+                    ))}
                   </div>
-                )}
+                </div>
                 {Object.entries(grupos).sort((a, b) => a[0].localeCompare(b[0])).map(([quem, fs]) => (
                   <div key={quem}>
-                    <div className="text-xs font-bold text-amber-800 mb-1.5">🧰 {quem} <span className="font-medium text-amber-600">({fs.reduce((t, f) => t + Number(f.quantidade || 1), 0)} item(ns) em campo)</span></div>
+                    <div className="text-xs font-bold text-amber-800 mb-1.5">🧰 {quem} <span className="font-medium text-amber-600">({unid(fs)} item(ns) em campo)</span></div>
                     <div className="space-y-1.5">{fs.map(linha)}</div>
                   </div>
                 ))}
@@ -1834,10 +1916,10 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
                   </div>
                 )}
               </div>
-            );
-          })()}
-        </div>
-      )}
+            )}
+          </div>
+        );
+      })()}
 
       {/* ============ ANDAIME (patrimônio fora do contrato) ============ */}
       {sub === 'andaime' && (
