@@ -302,7 +302,23 @@ const ListaOS: React.FC<Props> = ({ lista, aoEditar, aoMudar, filtroMinhas, rotu
   // executor — nenhuma informação foi tirada.
   const bDig = busca.trim();
   const soNumero = /^\d+$/.test(bDig);
-  const bN = buscaNorm(busca.trim());
+  // v120 (pedido do Leony 09/10 — "todos pesquisam, acabar com o fictício"):
+  // a busca passa a olhar também o SERVIÇO (pedido do fiscal e o executado),
+  // o fiscal, o local e a disciplina, e aceita VÁRIAS PALAVRAS — todas
+  // precisam aparecer ("imero bomba" acha a O.S. da bomba no IMERO). Antes
+  // eram só nº, escola e executor: quem procurava pelo serviço não achava a
+  // O.S. do fiscal e criava outra, fictícia.
+  // O texto de cada O.S. é normalizado UMA vez por carga da lista (celular
+  // fraco: 3 mil O.S. × 8 campos a cada letra digitada travava).
+  const textoBusca = useMemo(() => {
+    const m = new Map<OSCampo, string>();
+    for (const os of lista) {
+      m.set(os, buscaNorm([refDaOS(os), os.unidade, os.executor, os.solicitado, os.servico,
+        os.fiscal, (os as any).local, os.area].filter(Boolean).join(' ')));
+    }
+    return m;
+  }, [lista]);
+  const palavras = buscaNorm(bDig).split(/\s+/).filter(Boolean);
   const casaBusca = (os: OSCampo) => {
     if (!buscando) return true;
     if (soNumero) {
@@ -310,11 +326,11 @@ const ListaOS: React.FC<Props> = ({ lista, aoEditar, aoMudar, filtroMinhas, rotu
         ? String(os.numero).startsWith(bDig)
         : buscaNorm(refDaOS(os)).includes(bDig); // fictícia procurada só por dígitos (ex.: 20 acha L20)
     }
-    return (
-      buscaNorm(refDaOS(os)).includes(bN) ||
-      buscaNorm(os.unidade || '').includes(bN) ||
-      buscaNorm(os.executor || '').includes(bN)
-    );
+    const t = textoBusca.get(os) ?? buscaNorm([refDaOS(os), os.unidade, os.executor].filter(Boolean).join(' '));
+    // palavra só de dígitos no meio da busca ("imero 27", "lampada 18"):
+    // casa o nº da O.S. pelo início OU aparece no texto (o "18" do 18W)
+    return palavras.every(p => t.includes(p)
+      || (/^\d+$/.test(p) && os.numero != null && String(os.numero).startsWith(p)));
   };
   const filtradas = baseBusca.filter(os => casaFiltro(os) && casaBusca(os));
 
@@ -415,7 +431,7 @@ const ListaOS: React.FC<Props> = ({ lista, aoEditar, aoMudar, filtroMinhas, rotu
         </h2>
         <div className="relative">
           <Search size={14} className="absolute left-3 top-2.5 text-stone-400" />
-          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="nº, escola, executor…"
+          <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="nº, escola, serviço…"
             className="pl-8 pr-3 py-1.5 text-sm border border-stone-200 rounded-lg bg-stone-50 outline-none focus:border-fpv-500 w-48" />
         </div>
       </div>

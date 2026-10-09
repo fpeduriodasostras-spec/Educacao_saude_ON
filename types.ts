@@ -46,6 +46,23 @@ export const buscaNorm = (s: string): string =>
     .replace(/[̀-ͯ]/g, '')
     .replace(/([a-z])\1+/g, '$1');
 
+// v120 — CHAVE DA ESCOLA para comparar nomes escritos de jeitos diferentes
+// (a auditoria achou 122 grafias para 67 escolas): "E.M. Alberto Jorge",
+// "Escola M. Alberto Jorge" e "ESCOLA MUNICIPAL ALBERTO JORGE" viram todas
+// "alberto jorge". Tira acento, pontuação e as palavras de tipo de unidade.
+const TIPO_UNIDADE = new Set(['escola', 'e', 'm', 'em', 'creche', 'municipal', 'ciep', 'de', 'da', 'do', 'dos', 'das']);
+export const chaveEscola = (s: string): string =>
+  buscaNorm(s || '').split(/[^a-z0-9]+/).filter(p => p && !TIPO_UNIDADE.has(p)).join(' ');
+export const mesmaEscola = (a: string, b: string): boolean => {
+  const ka = chaveEscola(a), kb = chaveEscola(b);
+  if (!ka || !kb) return false;
+  if (ka === kb) return true;
+  // "imero" x "imero instituto ..." — um contém o outro (por palavra
+  // inteira), com folga mínima para nome curto não casar com qualquer coisa
+  const [menor, maior] = ka.length <= kb.length ? [ka, kb] : [kb, ka];
+  return menor.length >= 5 && (` ${maior} `).includes(` ${menor} `);
+};
+
 export const TIPO_OPTIONS = ['Emergencial', 'Corretiva', 'Preventiva'];
 // 'Avaliando' entrou pelo RV000 do engenheiro (funil: pendente →
 // executando → assinatura → avaliando → concluída)

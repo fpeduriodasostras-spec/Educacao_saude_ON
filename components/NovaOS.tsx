@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Save, Mic, Camera, X, Loader2, Eraser, Siren, PackageMinus, Plus, Minus } from 'lucide-react';
-import { OSCampo, STATUS_OPTIONS, FISCAL_OPTIONS, CLASSIF_OPTIONS, EXECUTOR_OPTIONS, MED_OPTIONS, TIPO_OPTIONS, refDaOS } from '../types';
+import { OSCampo, STATUS_OPTIONS, FISCAL_OPTIONS, CLASSIF_OPTIONS, EXECUTOR_OPTIONS, MED_OPTIONS, TIPO_OPTIONS, refDaOS, mesmaEscola } from '../types';
 import { ESCOLAS } from '../data/escolas';
 import { UNIDADES_SAUDE, LOCAIS_SAUDE, fiscalDaUnidadeSaude, contratoDaUnidade } from '../data/unidadesSaude';
 import { KIT_EMERGENCIAL } from '../data/materiais';
@@ -71,9 +71,10 @@ interface Props {
   usuario: string;
   aoSalvar: () => void;
   aoCancelarEdicao: () => void;
+  lista?: OSCampo[];   // v120: para achar a O.S. do fiscal antes de criar fictícia
 }
 
-const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao }) => {
+const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao, lista = [] }) => {
   const equipe = EQUIPES[usuario];
   const corretiva = CORRETIVA[usuario];
   // prefixo da numeração automática: L/M (equipes) ou G/C (corretiva)
@@ -121,6 +122,27 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
   const [osExistente, setOsExistente] = useState<OSCampo | null>(null);
   // v87: contrato escolhido decide a lista de unidades e de locais
   const ehSaude = (os.contrato || '') === 'Saúde';
+
+  // ===== v120 — "ACABAR COM O FICTÍCIO" (pedido do Leony 09/10) =====
+  // O fictício nasce aqui: a pessoa escolhe a escola, salva SEM nº e o banco
+  // gera um F-/L-/G-nº — mesmo quando o fiscal JÁ abriu a O.S. oficial
+  // daquela escola e ela está no sistema esperando. Agora, ao escolher a
+  // escola numa O.S. NOVA e sem nº, o formulário mostra as O.S. OFICIAIS
+  // abertas ali, com o botão ABRIR (mesmo caminho da v112: o que foi digitado
+  // preenche o que estiver vazio, nada do fiscal é sobrescrito).
+  // Aberta = com nº oficial, não excluída, e ainda não concluída/cancelada.
+  // Nomes de escola comparados pela chave (122 grafias p/ 67 escolas).
+  const candidatasFiscal = useMemo(() => {
+    if (os.id || os.numero != null) return [];
+    const esc = (os.unidade || '').trim();
+    if (esc.length < 4) return [];
+    return lista
+      .filter(o => o.numero != null && !o.excluida
+        && !['Concluído', 'Cancelada'].includes(o.status)
+        && mesmaEscola(o.unidade || '', esc))
+      .sort((a, b) => Number(b.numero) - Number(a.numero))
+      .slice(0, 8);
+  }, [lista, os.id, os.numero, os.unidade]);
   const [ouvindo, setOuvindo] = useState(false);
   const recRef = useRef<any>(null);
   const fotoRef = useRef<HTMLInputElement>(null);
@@ -293,8 +315,10 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
   // digitou PREENCHE os campos que lá estiverem vazios (nada é sobrescrito:
   // o registro do colega vale mais que o rascunho). Fotos anexadas ficam
   // anexadas; fotos que já subiram entram na lista da O.S.
-  const abrirParaCompletar = () => {
-    const ex = osExistente;
+  // v120: recebe a O.S. direto (lista de "O.S. do fiscal nesta escola") ou
+  // usa a da duplicata, como antes
+  const abrirParaCompletar = (alvo?: OSCampo) => {
+    const ex = alvo || osExistente;
     if (!ex) return;
     // mesma regra da LISTA: medição fechada é intocável para o campo
     const fechada = !!(ex.medicao || '').trim() && ex.medicao !== medDoMes();
@@ -372,6 +396,17 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
         setMsg('Conclusão pausada — anexe a foto ou confirme que ela está no grupo.');
         return;
       }
+    }
+    // v120: O.S. NOVA, SEM nº, numa escola onde o fiscal já tem O.S. aberta
+    // → pergunta antes de gerar o fictício. Não bloqueia: emergência que o
+    // fiscal ainda não abriu é legítima — mas a pessoa decide olhando a lista.
+    if (!os.id && os.numero == null && candidatasFiscal.length > 0) {
+      const nums = candidatasFiscal.map(o => refDaOS(o)).join(', ');
+      if (!confirm(
+        `O fiscal já tem ${candidatasFiscal.length} O.S. ABERTA(S) em ${os.unidade}: ${nums}.\n\n` +
+        `Se o seu serviço é uma delas, toque em CANCELAR e use o botão ABRIR na lista logo abaixo da escola — assim não nasce número fictício.\n\n` +
+        `OK = é outro serviço, criar O.S. NOVA sem número`
+      )) { setMsg('Escolha a O.S. do fiscal na lista abaixo da escola e toque em ABRIR.'); return; }
     }
     // v96: GARANTE O CONTRATO. Até aqui a O.S. nascia sem ele — só quem tem
     // o botão dos dois contratos preenchia, e o resultado foi 99,5% das
@@ -552,7 +587,7 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
           aproveitando o que a pessoa digitou (a LISTA do campo restrito
           não mostra a O.S. dos outros; este botão não depende dela) */}
       {osExistente && (
-        <button type="button" onClick={abrirParaCompletar}
+        <button type="button" onClick={() => abrirParaCompletar()}
           className="w-full bg-sky-600 active:bg-sky-700 text-white font-bold py-3 rounded-xl text-sm">
           ✏️ ABRIR a O.S. {refDaOS(osExistente)} ({osExistente.unidade}) e completar — sem perder o que digitei
         </button>
@@ -641,6 +676,31 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
         {/* v87: a digitação rápida segue o contrato escolhido — 68 escolas
             na Educação, 38 unidades da SEMUSA na Saúde */}
         <datalist id="escolas">{(ehSaude ? UNIDADES_SAUDE : ESCOLAS).map(e => <option key={e} value={e} />)}</datalist>
+        {/* v120: O.S. OFICIAIS já abertas pelo fiscal nesta escola — usar uma
+            delas em vez de criar número fictício */}
+        {candidatasFiscal.length > 0 && (
+          <div className="mt-2 bg-amber-50 border border-amber-300 rounded-xl p-3 space-y-1.5">
+            <p className="text-[12px] font-bold text-amber-900">
+              📋 O fiscal já abriu {candidatasFiscal.length === 1 ? 'esta O.S.' : `${candidatasFiscal.length} O.S.`} nesta escola.
+              Se o seu serviço é {candidatasFiscal.length === 1 ? 'ela' : 'uma delas'}, toque em ABRIR — assim não nasce número fictício.
+            </p>
+            {candidatasFiscal.map(c => (
+              <div key={c.id} className="flex items-center gap-2 bg-white border border-amber-200 rounded-lg px-2.5 py-2">
+                <div className="flex-1 min-w-0 text-[12px] text-stone-700">
+                  <b className="text-stone-900">OS {refDaOS(c)}</b>
+                  {c.entrada ? ` · ${String(c.entrada).slice(8, 10)}/${String(c.entrada).slice(5, 7)}` : ''}
+                  {c.area ? ` · ${c.area}` : ''}
+                  {` · ${c.status}`}
+                  {(c.solicitado || '').trim() && <span className="block truncate text-stone-500">{c.solicitado}</span>}
+                </div>
+                <button type="button" onClick={() => { abrirParaCompletar(c); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                  className="shrink-0 bg-sky-600 active:bg-sky-700 text-white font-bold text-[12px] px-3 py-2 rounded-lg">
+                  ABRIR
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         {/* v86: Emiliano e Gilson atendem OS DOIS contratos. O botão marca a
             qual a O.S. pertence — sem isso a medição da Educação puxa serviço
             da Saúde. As unidades de saúde entram na lista num segundo passo
@@ -896,7 +956,7 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
       {msg && <div className="text-sm font-medium text-fpv-700 bg-fpv-50 border border-fpv-100 rounded-lg px-3 py-2">{msg}</div>}
       {/* v112: o mesmo botão perto da mensagem de bloqueio do salvar */}
       {msg && osExistente && (
-        <button type="button" onClick={abrirParaCompletar}
+        <button type="button" onClick={() => abrirParaCompletar()}
           className="w-full bg-sky-600 active:bg-sky-700 text-white font-bold py-3 rounded-xl text-sm">
           ✏️ ABRIR a O.S. {refDaOS(osExistente)} ({osExistente.unidade}) e completar — sem perder o que digitei
         </button>

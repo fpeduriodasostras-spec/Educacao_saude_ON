@@ -223,6 +223,7 @@ const App: React.FC = () => {
             usuario={usuario}
             aoSalvar={() => { setEditando(null); recarregar(); }}
             aoCancelarEdicao={() => setEditando(null)}
+            lista={lista}
           />
         )}
         {aba === 'lista' && !soAlmox && (
