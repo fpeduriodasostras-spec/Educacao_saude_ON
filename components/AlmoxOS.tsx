@@ -265,6 +265,26 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
   // alarme ligado); antes ele se confundia com item nunca contado.
   const temContagem = (i: ItemEstoque) => !!i.contagem_em;
   const semContagem = itens.filter(i => !temContagem(i));
+
+  // ===== v122 — ENTRADAS "SOLTAS" (caso Marcio 13/10) =====
+  // 18 máquinas Makita entraram pela ENTRADA DE COMPRA com nota — só que a
+  // entrada só vira saldo se o item estiver no Estoque (material, com data de
+  // contagem) ou em Ferramentas (máquina/patrimônio). Não estavam em nenhum:
+  // a nota ficou registrada e as máquinas não apareciam em lugar nenhum para
+  // dar saída. Aqui aparecem as entradas dos últimos 30 dias nessa situação,
+  // para mandar ao lugar certo com um toque.
+  const [foraConversao, setForaConversao] = useState<Set<number>>(new Set());
+  // v122: "esta nota é de MÁQUINAS" — na entrada, cada item vira ferramenta também
+  const [notaDeFerramentas, setNotaDeFerramentas] = useState(false);
+  const entradasSoltas = useMemo(() => {
+    const d = new Date(); d.setDate(d.getDate() - 30);
+    const corte = d.toLocaleDateString('sv-SE');          // AAAA-MM-DD local (sem toISOString)
+    const nomesFerr = new Set(ferramentas.map(f => norm(f.descricao)));
+    const contados = new Set(itens.filter(temContagem).map(i => norm(i.descricao)));
+    return entradas.filter(en => en.id != null && String(en.data) >= corte
+      && Number(en.quantidade) > 0
+      && !nomesFerr.has(norm(en.descricao)) && !contados.has(norm(en.descricao)));
+  }, [entradas, ferramentas, itens]);
   // mínimo efetivo: o cadastrado no item OU a % padrão do setor sobre a
   // contagem inicial (pedido Renan/Lucas 06/07 — só painel do João)
   const minimoDe = (i: ItemEstoque): { min: number; padrao: boolean } | null => {
@@ -588,15 +608,32 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
     if (!item.descricao.trim()) { setMsg('Informe o material/ferramenta.'); return; }
     setSalvando(true); setMsg('');
     const payload: any = { ...item }; delete payload.id;
+    // v122 (caso Marcio 13/10): o campo "Contagem ATUAL" gravava o número mas
+    // NÃO a data da contagem — e desde o marco zero (v97) saldo sem data não
+    // existe: o item ficava "📋 sem contagem" e não dava para tirar. Agora,
+    // contagem nova (item novo com número, ou número mudado) carimba a data,
+    // igual ao 🧮 — e só para quem pode contar (REV001: contagem é da gestão).
+    const mudouContagem = itemExistente
+      ? Number(item.saldo_inicial) !== Number(itemExistente.saldo_inicial)
+      : Number(item.saldo_inicial) > 0;
+    const carimba = mudouContagem && podeAjustarContagem;
+    if (carimba) payload.contagem_em = new Date().toISOString();
     let { error } = await supabase.from('estoque_item').insert([payload]);
     if (error && /duplicate|unique/i.test(error.message)) {
       ({ error } = await supabase.from('estoque_item').update(payload).eq('descricao', item.descricao));
     }
+    if (error && /contagem_em/i.test(error.message)) {   // banco sem a 0008
+      delete payload.contagem_em;
+      ({ error } = await supabase.from('estoque_item').upsert([payload], { onConflict: 'descricao' }));
+    }
     setSalvando(false);
     if (error) { setMsg(/estoque_item/.test(error.message) ? '⚠️ Rode o ALMOX-V2.sql no Supabase primeiro.' : 'Erro: ' + error.message); return; }
-    setMsg(itemExistente
+    const notaContagem = carimba
+      ? ` Contagem de ${item.saldo_inicial} vale a partir de HOJE (entradas lançadas hoje somam em cima dela).`
+      : (mudouContagem ? ' ⚠️ A contagem só vale depois que a gestão confirmar no 🧮 da aba Estoque.' : '');
+    setMsg((itemExistente
       ? `✏️ ${item.descricao} atualizado (contagem ${item.saldo_inicial} · mín. ${item.qtd_minima} ${item.unidade}).`
-      : `✅ ${item.descricao} no catálogo (mín. ${item.qtd_minima} ${item.unidade}).`);
+      : `✅ ${item.descricao} no catálogo (mín. ${item.qtd_minima} ${item.unidade}).`) + notaContagem);
     setItem({ ...ITEM_VAZIO }); carregar();
   };
   // puxa os valores atuais do item para o formulário — sem isso o João
@@ -665,20 +702,97 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
     // por descrição de material, então nada de juntar em texto
     const linhas = itensEntrada.map(i => ({ ...base, descricao: i.descricao, quantidade: i.quantidade, unidade: i.unidade }));
     const { error } = await supabase.from('entrada_material').insert(linhas);
+    if (error) { setSalvando(false); setMsg(/entrada_material/.test(error.message) ? '⚠️ Rode o ALMOX-V2.sql no Supabase primeiro.' : 'Erro: ' + error.message); return; }
+    // v122: NOTA DE MÁQUINAS — além do registro da nota, cada item vira
+    // ferramenta (patrimônio) e aparece em Ferramentas/⚡ Elétricas pronto
+    // para "entregar →". Nome que já existe em Ferramentas não duplica.
+    let msgFerr = '';
+    if (notaDeFerramentas) {
+      const jaTem = new Set(ferramentas.map(f => norm(f.descricao)));
+      const novas = itensEntrada.filter(i => !jaTem.has(norm(i.descricao)));
+      if (novas.length) {
+        const { error: ef } = await supabase.from('ferramenta')
+          .insert(novas.map(i => ({ descricao: i.descricao, quantidade: i.quantidade })));
+        msgFerr = ef
+          ? ` ⚠️ a nota foi lançada, mas as máquinas NÃO entraram em Ferramentas (${ef.message}) — use o quadro "Entrou pela nota" abaixo.`
+          : ` 🔧 ${novas.length} máquina(s) cadastrada(s) em Ferramentas — já aparecem para "entregar →".`;
+      }
+    }
     setSalvando(false);
-    if (error) { setMsg(/entrada_material/.test(error.message) ? '⚠️ Rode o ALMOX-V2.sql no Supabase primeiro.' : 'Erro: ' + error.message); return; }
     // v117: material que não está no catálogo NÃO aparece no Estoque (o
     // saldo é por item cadastrado) — avisa em vez de sumir calado
-    const foraCatalogo = Array.from(new Set(
+    const foraCatalogo = notaDeFerramentas ? [] : Array.from(new Set(
       itensEntrada.filter(i => !itens.some(it => norm(it.descricao) === norm(i.descricao))).map(i => i.descricao)
     ));
     const resumo = itensEntrada.length === 1
       ? `${itensEntrada[0].quantidade} ${itensEntrada[0].unidade} ${itensEntrada[0].descricao}`
       : `${itensEntrada.length} itens (${itensEntrada.map(i => `${i.quantidade} ${i.unidade} ${i.descricao}`).join(' · ')})`;
-    setMsg(`✅ Entrada: ${resumo}${nf_url ? ' 🧾 NF anexada' : ''}` +
-      (foraCatalogo.length ? ` ⚠️ fora do catálogo (não aparece no Estoque até cadastrar): ${foraCatalogo.join(', ')}.` : ''));
-    setCestaEntrada([]); nfEnviada.current = null;
+    setMsg(`✅ Entrada: ${resumo}${nf_url ? ' 🧾 NF anexada' : ''}` + msgFerr +
+      (foraCatalogo.length ? ` ⚠️ fora do catálogo — ainda não aparece para saída. Mande para o lugar certo no quadro "Entrou pela nota" desta aba: ${foraCatalogo.join(', ')}.` : ''));
+    setCestaEntrada([]); nfEnviada.current = null; setNotaDeFerramentas(false);
     setEntrada({ ...ENTRADA_VAZIA }); setNfFoto(null); carregar();
+  };
+
+  // v122: manda as entradas "soltas" marcadas para o lugar certo.
+  //  · FERRAMENTA → uma ferramenta por nome (quantidade somada), status
+  //    ESTOQUE: aparece em Ferramentas/⚡ Elétricas com "entregar →"
+  //  · ESTOQUE (material de consumo) → item no catálogo com contagem ZERO
+  //    carimbada no dia da nota: o saldo passa a ser exatamente o que entrou
+  //    pela nota (marco zero da v97), sem contar duas vezes.
+  // A linha da nota em entrada_material fica como está (é o registro da compra).
+  const emConverter = useRef(false);
+  const converterEntradas = async (destino: 'ferramenta' | 'estoque') => {
+    if (emConverter.current) return;
+    const alvo = entradasSoltas.filter(en => !foraConversao.has(en.id!));
+    if (alvo.length === 0) { setMsg('Marque pelo menos um item do quadro "Entrou pela nota".'); return; }
+    const porNome = new Map<string, { descricao: string; quantidade: number; unidade: string; data: string }>();
+    for (const en of alvo) {
+      const k = norm(en.descricao);
+      const p = porNome.get(k);
+      if (p) { p.quantidade += Number(en.quantidade || 0); if (String(en.data) < p.data) p.data = String(en.data); }
+      else porNome.set(k, { descricao: en.descricao.trim(), quantidade: Number(en.quantidade || 0), unidade: en.unidade, data: String(en.data) });
+    }
+    const lista = Array.from(porNome.values());
+    if (!confirm(destino === 'ferramenta'
+      ? `Cadastrar ${lista.length} item(ns) em FERRAMENTAS (máquinas/patrimônio)?\n\nVão aparecer em Ferramentas — as elétricas na aba ⚡ Elétricas — prontas para "entregar →".`
+      : `Cadastrar ${lista.length} item(ns) no ESTOQUE como MATERIAL DE CONSUMO?\n\nO saldo de cada um passa a ser o que entrou pela nota, e a saída é pela aba Saída.`)) return;
+    emConverter.current = true;
+    setSalvando(true); setMsg('');
+    try {
+      let error: any = null;
+      if (destino === 'ferramenta') {
+        ({ error } = await supabase.from('ferramenta')
+          .insert(lista.map(i => ({ descricao: i.descricao, quantidade: i.quantidade || 1 }))));
+      } else {
+        // já no catálogo SEM contagem (cadastrado à mão, como o Marcio fez):
+        // só carimba contagem zero no dia da nota — categoria/mínimo ficam
+        const doCatalogo = new Map(itens.map(i => [norm(i.descricao), i]));
+        const novos = lista.filter(i => !doCatalogo.has(norm(i.descricao)));
+        const jaExistem = lista.filter(i => doCatalogo.has(norm(i.descricao)));
+        if (novos.length) {
+          ({ error } = await supabase.from('estoque_item').insert(novos.map(i => ({
+            descricao: i.descricao, categoria: 'DIVERSOS', unidade: i.unidade,
+            qtd_minima: 0, saldo_inicial: 0, contagem_em: `${i.data}T00:00:00`,
+          }))));
+        }
+        for (const i of jaExistem) {
+          if (error) break;
+          const atual = doCatalogo.get(norm(i.descricao))!;
+          ({ error } = await supabase.from('estoque_item')
+            .update({ saldo_inicial: 0, contagem_em: `${i.data}T00:00:00` })
+            .eq('descricao', atual.descricao));
+        }
+      }
+      if (error) { setMsg('Erro ao cadastrar: ' + error.message); return; }
+      setMsg(destino === 'ferramenta'
+        ? `🔧 ${lista.length} item(ns) cadastrado(s) em Ferramentas — veja na aba ⚡ Elétricas (ou Ferramentas) e use "entregar →" para dar saída.`
+        : `📦 ${lista.length} item(ns) no Estoque com o saldo da nota — já aparecem para saída.`);
+      setForaConversao(new Set());
+      carregar();
+    } finally {
+      emConverter.current = false;
+      setSalvando(false);
+    }
   };
 
   // v90: corrigir uma entrada já lançada. O saldo é contagem + entradas −
@@ -1473,6 +1587,60 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
       {/* ============ CADASTRO (item + entrada c/ NF) ============ */}
       {sub === 'cadastro' && (
         <>
+          {/* ===== v122: ENTROU PELA NOTA MAS NÃO APARECE EM LUGAR NENHUM ===== */}
+          {entradasSoltas.length > 0 && (() => {
+            // agrupa por NOTA (data · nº da NF/obs · fornecedor) para ele
+            // reconhecer a compra que acabou de lançar
+            const notas: Record<string, Entrada[]> = {};
+            for (const en of entradasSoltas) {
+              const k = `${en.data}|${(en.obs || '').trim()}|${(en.origem || '').trim()}`;
+              (notas[k] = notas[k] || []).push(en);
+            }
+            const marcados = entradasSoltas.filter(en => !foraConversao.has(en.id!)).length;
+            const alterna = (id: number) => setForaConversao(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+            return (
+              <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-4 space-y-3">
+                <div>
+                  <h2 className="font-bold text-amber-900 text-sm">📥 Entrou pela nota, mas ainda não aparece em lugar nenhum ({entradasSoltas.length})</h2>
+                  <p className="text-[11px] text-amber-900/80 mt-0.5">
+                    A nota está registrada, mas o item só fica disponível para saída quando está no lugar certo:
+                    <b> máquina/ferramenta</b> (com nº de série, empresta e volta) vai para <b>Ferramentas</b>;
+                    <b> material de consumo</b> (sifão, lâmpada, cabo) vai para o <b>Estoque</b>.
+                  </p>
+                </div>
+                {Object.entries(notas).sort((a, b) => b[0].localeCompare(a[0])).map(([k, ens]) => {
+                  const [dt, obs, origem] = k.split('|');
+                  return (
+                    <div key={k} className="bg-white border border-amber-200 rounded-xl p-2.5 space-y-1">
+                      <p className="text-[11px] font-bold text-stone-600">
+                        🧾 {dt.slice(8, 10)}/{dt.slice(5, 7)}{obs ? ` · ${obs}` : ''}{origem ? ` · ${origem}` : ''} — {ens.length} item(ns)
+                      </p>
+                      {ens.map(en => (
+                        <label key={en.id} className="flex items-center gap-2 text-[12px] text-stone-700 cursor-pointer">
+                          <input type="checkbox" checked={!foraConversao.has(en.id!)} onChange={() => alterna(en.id!)} />
+                          <span className="flex-1 min-w-0 truncate"><b>{en.quantidade} {en.unidade}</b> {en.descricao}</span>
+                          {ehEletrica(en.descricao) && <span className="text-[10px] font-bold text-fpv-700 shrink-0">⚡</span>}
+                        </label>
+                      ))}
+                    </div>
+                  );
+                })}
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <button type="button" disabled={salvando || marcados === 0} onClick={() => converterEntradas('ferramenta')}
+                    className="flex-1 bg-fpv-600 active:bg-fpv-700 disabled:bg-stone-300 text-white font-bold py-2.5 rounded-xl text-sm">
+                    🔧 São MÁQUINAS/FERRAMENTAS → Ferramentas ({marcados})
+                  </button>
+                  {podeAjustarContagem && (
+                    <button type="button" disabled={salvando || marcados === 0} onClick={() => converterEntradas('estoque')}
+                      className="flex-1 bg-white border-2 border-fpv-300 text-fpv-700 font-bold py-2.5 rounded-xl text-sm disabled:opacity-50">
+                      📦 São MATERIAL de consumo → Estoque ({marcados})
+                    </button>
+                  )}
+                </div>
+                <p className="text-[10px] text-amber-900/70">Desmarque o que não for do mesmo tipo e faça em duas vezes. Se já cadastrou alguma máquina à mão no “Cadastro no estoque” abaixo, apague-a depois no Estoque (🗑) — máquina fica só em Ferramentas.</p>
+              </div>
+            );
+          })()}
           <form onSubmit={salvarItem} className="bg-white rounded-2xl border border-stone-200 shadow-sm p-5 space-y-3">
             <h2 className="font-bold text-stone-900 text-sm">
               {itemExistente ? 'Atualizar item já cadastrado' : 'Cadastro no estoque (com quantidade mínima)'}
@@ -1511,6 +1679,11 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
           <form onSubmit={salvarEntrada} className="bg-white rounded-2xl border border-stone-200 shadow-sm p-5 space-y-3">
             <h2 className="font-bold text-stone-900 text-sm">Entrada de material (compra) — com foto da NOTA</h2>
             <p className="text-[11px] text-stone-500 -mt-1">Uma nota com vários materiais? Preencha a nota uma vez e use “Adicionar este item” para cada material.</p>
+            {/* v122: nota de MÁQUINAS (caso das 18 Makita do Marcio, 13/10) */}
+            <label className={`flex items-start gap-2 rounded-xl border px-3 py-2 text-[12px] cursor-pointer ${notaDeFerramentas ? 'bg-fpv-50 border-fpv-300 text-fpv-800' : 'bg-stone-50 border-stone-200 text-stone-600'}`}>
+              <input type="checkbox" className="mt-0.5" checked={notaDeFerramentas} onChange={e => setNotaDeFerramentas(e.target.checked)} />
+              <span><b>Esta nota é de MÁQUINAS/FERRAMENTAS</b> (furadeira, martelete, serra… com nº de série). Marcado: além de registrar a nota, cada item entra em <b>Ferramentas</b> (as elétricas na aba ⚡ Elétricas), pronto para “entregar →”.</span>
+            </label>
             {/* v117: CABEÇALHO DA NOTA — vale para todos os itens da cesta */}
             <div className="grid grid-cols-2 gap-3">
               <input type="date" value={entrada.data} onChange={e => setEntrada(p => ({ ...p, data: e.target.value }))} className={inputCls} />
