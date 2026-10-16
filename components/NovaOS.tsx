@@ -445,8 +445,17 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
     // vencer. Dois celulares dividem o mesmo login (Leandro+Caleb, e o Queiroz
     // também) e o app fica horas no bolso com a tela apagada — é aí que a
     // sessão morre e o envio inteiro é recusado de uma vez.
-    if (fotos.length) setMsg('conferindo a conexão…');
-    await osService.garanteSessao();
+    setMsg('conferindo a conexão…');
+    // v123: NADA vai como anônimo. Login vencido → a tela de login abre por
+    // cima (App.tsx) e o formulário + fotos continuam aqui; sem rede → avisa.
+    const sess = await osService.garanteSessao();
+    if (sess !== 'ok') {
+      setSalvando(false);
+      setMsg(sess === 'sem-sessao'
+        ? '🔒 Seu login venceu. Entre de novo na tela que abriu — as fotos e o que você digitou CONTINUAM aqui. Depois toque em SALVAR de novo.'
+        : '📶 Sem conexão com o servidor agora. NADA foi enviado. Espere uns segundos (ou ligue os dados) e toque em SALVAR de novo — as fotos continuam aqui.');
+      return;
+    }
 
     if (fotos.length) setMsg(`enviando fotos… 0/${fotos.length}`);
     const { urls: novas, falhas, erros, urlPorIndice } = await osService.uploadFotos(fotos,

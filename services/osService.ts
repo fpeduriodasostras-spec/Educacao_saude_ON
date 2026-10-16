@@ -46,14 +46,38 @@ export const osService = {
   // queimava um numero da sequencia do banco (6 queimados em 21 e 22/09).
   // Agora confere e renova ANTES de comecar. Nunca derruba o fluxo: se nao
   // conseguir renovar, segue e deixa o erro aparecer com a mensagem certa.
-  async garanteSessao(): Promise<void> {
-    try {
-      const { data } = await supabase.auth.getSession();
-      const s: any = data?.session;
-      if (!s) return;                       // sem sessao: o login cuida disso
-      const faltam = (Number(s.expires_at || 0) * 1000) - Date.now();
-      if (faltam < 120000) await supabase.auth.refreshSession();   // menos de 2 min
-    } catch { /* nao atrapalha o salvamento */ }
+  //
+  // v123 — CASO CALEB (16/10, já no Supabase da VPS). A sessão venceu com o
+  // app no bolso; na hora de salvar a renovação falhou e esta função DESISTIA
+  // CALADA ("sem sessao: o login cuida disso") — o envio seguia como ANÔNIMO:
+  // as fotos voltavam "new row violates row-level security policy" e a O.S.
+  // 401. Depois o app caía na tela de login e as 28 fotos se perdiam.
+  // Agora ela DIZ o que houve e quem chama NÃO envia se não for 'ok':
+  //   'ok'         → sessão válida (renovada se faltava < 2 min)
+  //   'sem-sessao' → login vencido/recusado → a tela de login abre POR CIMA
+  //                  (App.tsx) sem apagar o formulário nem as fotos
+  //   'sem-rede'   → não deu para falar com o servidor (o iPhone acordando
+  //                  costuma ficar uns segundos sem rede): tentar de novo
+  // 3 tentativas com 1,5 s de folga antes de desistir.
+  async garanteSessao(): Promise<'ok' | 'sem-sessao' | 'sem-rede'> {
+    const deRede = (m?: string) => /fetch|network|timeout|failed|load failed|offline/i.test(m || '');
+    for (let tentativa = 0; tentativa < 3; tentativa++) {
+      try {
+        const { data, error } = await supabase.auth.getSession();
+        const s: any = data?.session;
+        if (s) {
+          const faltam = (Number(s.expires_at || 0) * 1000) - Date.now();
+          if (faltam > 120000) return 'ok';
+          const r = await supabase.auth.refreshSession();
+          if (r.data?.session) return 'ok';
+          if (r.error && !deRede(r.error.message)) return 'sem-sessao';
+        } else if (!error || !deRede(error.message)) {
+          return 'sem-sessao';                // deslogado de verdade
+        }
+      } catch { /* exceção solta = rede instável: tenta de novo */ }
+      await new Promise(res => setTimeout(res, 1500));
+    }
+    return 'sem-rede';
   },
 
   async salvar(os: OSCampo, jaRenovou = false): Promise<{ ok: boolean; erro?: string; os?: OSCampo }> {

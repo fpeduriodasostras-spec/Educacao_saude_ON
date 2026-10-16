@@ -54,6 +54,14 @@ método AIOS: erro numerado nunca volta.
 
 ## Supabase / dados
 
+- **#26 Sessão vencida NÃO pode virar envio anônimo.** O login dura 1 h; com
+  o app no bolso a renovação falha (iPhone acordando sem rede, ou token
+  recusado) e o supabase-js passa a mandar só a chave pública: foto volta
+  "new row violates row-level security policy", O.S. volta 401 (caso Caleb,
+  16/10, já no Supabase da VPS). Regra: TODO caminho que grava chama
+  `garanteSessao()` e só segue com 'ok'. E sessão que cai sem ser pelo
+  botão Sair NÃO desmonta o app — o login abre por cima (App.tsx), senão
+  o formulário perde as fotos (v123).
 - **#7 PostgREST corta GET em 1000 linhas.** Toda listagem grande pagina
   (`range`) até vir página incompleta (osService.listar). KPI sobre lista
   parcial = decisão errada silenciosa — por isso listar devolve `{dados, erro}`.

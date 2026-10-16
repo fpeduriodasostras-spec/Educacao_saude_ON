@@ -93,6 +93,12 @@ const ENTRADA_VAZIA: Entrada = { data: hoje(), descricao: '', quantidade: 1, uni
 
 type SubAba = 'stats' | 'saida' | 'cadastro' | 'estoque' | 'ferramentas' | 'eletricas' | 'andaime' | 'solicitacoes';
 
+// v123: o que dizer quando o login venceu ou a rede sumiu (garanteSessao)
+const MSG_SESSAO: Record<'sem-sessao' | 'sem-rede', string> = {
+  'sem-sessao': '🔒 Seu login venceu. Entre de novo na tela que abriu — o que você lançou aqui CONTINUA na tela. Depois toque em registrar de novo.',
+  'sem-rede': '📶 Sem conexão com o servidor agora. NADA foi gravado. Espere uns segundos e toque em registrar de novo — está tudo na tela.',
+};
+
 // v121 (pedido do Leony 09/10): FERRAMENTAS ELÉTRICAS ganham aba própria —
 // "quantas tem e onde estão" sem rolar a lista inteira de ferramentas.
 // A tabela `ferramenta` não tem campo de tipo, então a separação é PELO
@@ -446,6 +452,12 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
       osRef = '';
     }
 
+    // v123: nada vai como anônimo (caso Caleb 16/10) — login vencido abre por
+    // cima (App.tsx) e a cesta continua aqui; sem rede, avisa e não grava
+    setMsg('conferindo a conexão…');
+    const sess = await osService.garanteSessao();
+    if (sess !== 'ok') { setMsg(MSG_SESSAO[sess]); return; }
+
     // gera a O.S. EMERGENCIAL no balcão e já vincula a saída a ela
     if (gerarOS && !osRef) {
       if (!saida.escola.trim()) { setMsg('Para gerar a O.S. informe a ESCOLA.'); return; }
@@ -684,6 +696,10 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
       itensEntrada.push({ descricao: digitado, quantidade: entrada.quantidade, unidade: entrada.unidade });
     }
     if (itensEntrada.length === 0) { setMsg('Informe o material da entrada.'); return; }
+    // v123: nada vai como anônimo — a nota e a foto continuam aqui
+    setMsg('conferindo a conexão…');
+    const sess = await osService.garanteSessao();
+    if (sess !== 'ok') { setMsg(MSG_SESSAO[sess]); return; }
     setSalvando(true); setMsg('');
     // a foto da NF sobe UMA vez por nota (antes: uma vez por material)
     let nf_url: string | null = null;

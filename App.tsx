@@ -40,13 +40,35 @@ const App: React.FC = () => {
   const [novaSenha2, setNovaSenha2] = useState('');
   const [senhaMsg, setSenhaMsg] = useState('');
 
+  // v123 — CASO CALEB (16/10): o login VENCEU com o app no bolso e o app
+  // trocava a tela inteira pela de login — o formulário desmontava e as 28
+  // fotos da O.S. se perdiam (o rascunho guarda só o texto). Agora, se a
+  // sessão cair SEM ser pelo botão Sair, o app continua montado com a última
+  // sessão e a tela de login abre POR CIMA; entrou de novo, está tudo lá.
+  const [ultimaSessao, setUltimaSessao] = useState<any>(null);
+  const saiuDeProposito = useRef(false);
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSessao(data.session);
+      if (data.session) setUltimaSessao(data.session);
       setCarregandoSessao(false);
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_ev, s) => setSessao(s));
+    const { data: sub } = supabase.auth.onAuthStateChange((_ev, s) => {
+      setSessao(s);
+      if (s) { setUltimaSessao(s); saiuDeProposito.current = false; }
+      else if (saiuDeProposito.current) setUltimaSessao(null);
+    });
     return () => sub.subscription.unsubscribe();
+  }, []);
+
+  // v123: ao VOLTAR para o app (tirar do bolso) confere o login NA HORA —
+  // vencido, a renovação roda já; recusada, a tela de login abre por cima
+  // ANTES de a pessoa digitar e fotografar tudo, não no fim.
+  useEffect(() => {
+    const aoVoltar = () => { if (document.visibilityState === 'visible') supabase.auth.getSession().catch(() => { /* rede */ }); };
+    document.addEventListener('visibilitychange', aoVoltar);
+    return () => document.removeEventListener('visibilitychange', aoVoltar);
   }, []);
 
   // gestores, engenheiro e medição abrem direto na tela deles — SÓ 1x por login
@@ -54,7 +76,9 @@ const App: React.FC = () => {
   const jaDirecionou = useRef(false);
   const linkDirecionou = useRef(false); // v109: o desvio pro formulário vale 1x por carga
   useEffect(() => {
-    if (!sessao) { jaDirecionou.current = false; return; }
+    // v123: login que VENCEU não zera o teleporte — senão, ao entrar de novo,
+    // a equipe era levada pro painel e o formulário com as fotos desmontava
+    if (!sessao) { if (saiuDeProposito.current) jaDirecionou.current = false; return; }
     const u = sessao.user?.email?.split('@')[0];
     if (u && !jaDirecionou.current) {
       // v109: deep link do fiscal VENCE o teleporte — sem isso a equipe é
@@ -95,9 +119,12 @@ const App: React.FC = () => {
   }, [sessao]);
 
   if (carregandoSessao) return <div className="min-h-screen flex items-center justify-center text-stone-400">Carregando…</div>;
-  if (!sessao) return <LoginScreen />;
+  // v123: sem sessão E sem uma anterior (1º acesso ou Sair) = tela de login
+  // normal; sessão que venceu = app segue montado e o login abre por cima
+  const sessaoTela = sessao || ultimaSessao;
+  if (!sessaoTela) return <LoginScreen />;
 
-  const usuario = sessao.user?.email?.split('@')[0] || 'usuário';
+  const usuario = sessaoTela.user?.email?.split('@')[0] || 'usuário';
   const ehGestor = GESTORES.includes(usuario);
   // João: SÓ o Almoxarifado — é o dashboard dele, sem O.S./fechamento
   const soAlmox = ALMOX.includes(usuario) && !ehGestor;
@@ -154,6 +181,17 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen pb-24">
+      {/* v123: LOGIN VENCIDO — abre por cima, sem desmontar nada por baixo */}
+      {!sessao && (
+        <div className="fixed inset-0 z-50 bg-stone-900/70 overflow-y-auto print-hidden">
+          <div className="max-w-sm mx-auto px-4 pt-4">
+            <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl px-4 py-3 text-[13px] font-bold text-amber-900">
+              🔒 Seu login venceu. Entre de novo aqui embaixo — o que você estava fazendo (formulário, fotos) CONTINUA aberto atrás desta tela. Depois é só tocar em SALVAR de novo.
+            </div>
+          </div>
+          <LoginScreen />
+        </div>
+      )}
       <header className="bg-white border-b border-stone-200 px-4 py-3 flex items-center gap-3 sticky top-0 z-20 print-hidden">
         <div className="w-9 h-9 rounded-lg bg-fpv-500 text-white flex items-center justify-center font-bold text-xs">FPV</div>
         <div className="flex-1 leading-tight">
@@ -176,7 +214,7 @@ const App: React.FC = () => {
             acesso ainda valia, e entre 0 e 60 minutos depois TUDO passava a ser
             recusado de uma vez. Era a falha "zero de N", que parecia sinal.
             'local' encerra a sessão SÓ deste aparelho. */}
-        <button onClick={() => { if (confirm('Sair SÓ DESTE celular?\n\nOs outros da sua equipe continuam conectados nos aparelhos deles.\nVocê vai precisar digitar a senha de novo para entrar.')) supabase.auth.signOut({ scope: 'local' }); }} title="Sair" className="p-2 text-stone-400 hover:text-red-500 rounded-lg hover:bg-stone-50">
+        <button onClick={() => { if (confirm('Sair SÓ DESTE celular?\n\nOs outros da sua equipe continuam conectados nos aparelhos deles.\nVocê vai precisar digitar a senha de novo para entrar.')) { saiuDeProposito.current = true; supabase.auth.signOut({ scope: 'local' }); } }} title="Sair" className="p-2 text-stone-400 hover:text-red-500 rounded-lg hover:bg-stone-50">
           <LogOut size={18} />
         </button>
       </header>
