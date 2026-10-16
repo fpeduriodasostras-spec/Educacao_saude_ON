@@ -65,8 +65,11 @@ const App: React.FC = () => {
   // v123: ao VOLTAR para o app (tirar do bolso) confere o login NA HORA —
   // vencido, a renovação roda já; recusada, a tela de login abre por cima
   // ANTES de a pessoa digitar e fotografar tudo, não no fim.
+  // v124: usa o garanteSessao — se o login guardado SUMIU do aparelho (caso
+  // emergencia1: nenhuma renovação em 6 h, sem aviso), ele força o login por
+  // cima; sem rede, não faz nada (não derruba quem só está sem sinal)
   useEffect(() => {
-    const aoVoltar = () => { if (document.visibilityState === 'visible') supabase.auth.getSession().catch(() => { /* rede */ }); };
+    const aoVoltar = () => { if (document.visibilityState === 'visible') osService.garanteSessao().catch(() => { /* rede */ }); };
     document.addEventListener('visibilitychange', aoVoltar);
     return () => document.removeEventListener('visibilitychange', aoVoltar);
   }, []);

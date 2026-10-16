@@ -72,6 +72,14 @@ export const osService = {
           if (r.data?.session) return 'ok';
           if (r.error && !deRede(r.error.message)) return 'sem-sessao';
         } else if (!error || !deRede(error.message)) {
+          // v124 — CORREÇÃO DA v123 (logs do GoTrue, 16/10): o iPhone da
+          // emergencia1 NÃO tentou renovar nada entre 08:00 e 14:41 — o login
+          // guardado no aparelho SUMIU sem aviso (sem evento SIGNED_OUT), e a
+          // tela seguia "logada" com a sessão antiga na memória. Então o login
+          // por cima da v123 nunca abria. signOut LOCAL força o evento: o App
+          // mostra o login por cima, sem desmontar nada, e não mexe nos outros
+          // aparelhos da conta (scope 'local').
+          try { await supabase.auth.signOut({ scope: 'local' }); } catch { /* ok */ }
           return 'sem-sessao';                // deslogado de verdade
         }
       } catch { /* exceção solta = rede instável: tenta de novo */ }
