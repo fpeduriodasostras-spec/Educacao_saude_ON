@@ -13,7 +13,11 @@ export const VOZ_ATIVA = false;
 // aba Gestão, enxerga o almoxarifado) mas SEM despacho — não designa equipe nem
 // define prioridade P1-P3, que é a lista `podePriorizar` do App.tsx.
 // Para dar despacho a ele é uma palavra: acrescentar 'juan' naquela lista.
-export const GESTORES = ['lucas', 'rafael', 'marcio', 'renan', 'edmar', 'juan'];
+// Lorran entrou em 22/10 (pedido do Leony): responsável pelo almoxarifado junto
+// com o Marcio Junior, com os MESMOS acessos dele (gestão + despacho + ajuste de
+// contagem + exclusão no almox/O.S. pela RLS). Só a tela "Rota de Conferência"
+// (Gestao.tsx) continua exclusiva do Marcio, que é o assistente de engenharia.
+export const GESTORES = ['lucas', 'rafael', 'marcio', 'renan', 'edmar', 'juan', 'lorran'];
 
 // João só enxerga o Almoxarifado — ele é o responsável pelo estoque,
 // não lança O.S. (gestão também vê a aba p/ acompanhar)
@@ -104,6 +108,7 @@ export const ACESSOS: Acesso[] = [
   // o histórico dele continua no banco (regra dura nº 11). Marcio Junior
   // entrou no lugar, com login e numeração próprios.
   { rotulo: 'Marcio Junior', email: 'marcio@fpv.app', dica: 'assistente · engenharia', emoji: '👷', grupo: 'gestao' },
+  { rotulo: 'Lorran', email: 'lorran@fpv.app', dica: 'almoxarifado · gestão', emoji: '📦', grupo: 'gestao' },
   { rotulo: 'Renan', email: 'renan@fpv.app', dica: 'gestão', emoji: '📊', grupo: 'gestao' },
   { rotulo: 'Lucas', email: 'lucas@fpv.app', dica: 'gestor geral', emoji: '📊', grupo: 'gestao' },
   { rotulo: 'Rafael', email: 'rafael@fpv.app', dica: 'gestão', emoji: '📊', grupo: 'gestao' },

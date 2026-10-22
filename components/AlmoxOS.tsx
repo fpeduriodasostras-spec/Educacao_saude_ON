@@ -182,7 +182,8 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
   const [apelidos, setApelidos] = useState<string[]>([]); // autopreenchimento acumulativo (REV002)
   const [mesFiltro, setMesFiltro] = useState('TODOS'); // histórico por mês (REV002)
   // contagem: Nicolas/Renan (REV001) + Lucas por ser o gestor geral
-  const podeAjustarContagem = ['marcio', 'renan', 'lucas'].includes(usuario);
+  // v125: + Lorran, que divide o almoxarifado com o Marcio (22/10)
+  const podeAjustarContagem = ['marcio', 'renan', 'lucas', 'lorran'].includes(usuario);
 
   const carregar = async () => {
     const [rs, ri, re, rf, rq] = await Promise.all([
