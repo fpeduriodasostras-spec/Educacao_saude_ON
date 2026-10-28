@@ -302,107 +302,13 @@ const maiorLoteAceito = (nav: any, files: File[]): File[] => {
 // A cópia para a área de transferência foi para DEPOIS do share, pelo mesmo
 // motivo: ela era um await entre o dedo e a folha.
 // =====================================================================
-// =====================================================================
-// v126 — ÁLBUM ("book") COM 2 OU 3 FOTOS (caso QS34 do Queiroz, 28/10).
-// O WhatsApp só junta as fotos num álbum quando chegam 4 ou mais. Com 2 ou
-// 3, cada foto vai SOLTA e com a legenda repetida em todas — o grupo via a
-// QS34 em 3 mensagens iguais, enquanto as O.S. com mais fotos chegavam no
-// álbum. Nesses casos o app gera a CAPA da O.S. (e, com 2 fotos, também a
-// FICHA da quantificação) para completar 4 itens. As fotos reais seguem na
-// ordem de sempre; a capa/ficha nunca toma o lugar de uma foto (ver enviarOS).
-// =====================================================================
-const CARTAO = /^OS_(CAPA|FICHA)_/;
-
-const quebrar = (ctx: CanvasRenderingContext2D, texto: string, largura: number, maxLinhas: number): string[] => {
-  const linhas: string[] = [];
-  for (const paragrafo of texto.replace(/\r/g, '').split('\n')) {
-    let atual = '';
-    for (const palavra of paragrafo.split(/\s+/).filter(Boolean)) {
-      const teste = atual ? `${atual} ${palavra}` : palavra;
-      if (ctx.measureText(teste).width <= largura) { atual = teste; continue; }
-      if (atual) linhas.push(atual);
-      atual = palavra;
-      if (linhas.length >= maxLinhas) break;
-    }
-    if (atual && linhas.length < maxLinhas) linhas.push(atual);
-    if (linhas.length >= maxLinhas) break;
-  }
-  const total = texto.split(/\s+/).filter(Boolean).length;
-  const usadas = linhas.join(' ').split(/\s+/).filter(Boolean).length;
-  if (usadas < total && linhas.length) linhas[linhas.length - 1] = linhas[linhas.length - 1].replace(/\s*\S*$/, ' …');
-  return linhas;
-};
-
-const cartao = async (titulo: string, sub: string, campos: [string, string][], rotuloCorpo: string,
-                      corpo: string, nome: string): Promise<File | null> => {
-  try {
-    const c = document.createElement('canvas');
-    c.width = 1080; c.height = 1080;
-    const ctx = c.getContext('2d');
-    if (!ctx) return null;
-    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, 1080, 1080);
-    ctx.fillStyle = '#166534'; ctx.fillRect(0, 0, 1080, 210);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 88px sans-serif'; ctx.fillText(titulo, 60, 118);
-    ctx.font = '40px sans-serif'; ctx.fillText(sub, 60, 180);
-    let y = 290;
-    for (const [rot, val] of campos) {
-      const v = String(val || '').trim();
-      if (!/[a-zA-ZÀ-ÿ0-9]/.test(v)) continue;
-      ctx.fillStyle = '#6b7280'; ctx.font = 'bold 30px sans-serif'; ctx.fillText(rot.toUpperCase(), 60, y);
-      ctx.fillStyle = '#111827'; ctx.font = '42px sans-serif';
-      for (const l of quebrar(ctx, v, 960, 2)) { y += 52; ctx.fillText(l, 60, y); }
-      y += 46;
-    }
-    const txt = String(corpo || '').trim();
-    if (/[a-zA-ZÀ-ÿ0-9]/.test(txt) && y < 960) {
-      ctx.fillStyle = '#6b7280'; ctx.font = 'bold 30px sans-serif'; ctx.fillText(rotuloCorpo.toUpperCase(), 60, y);
-      ctx.fillStyle = '#111827'; ctx.font = '38px sans-serif';
-      for (const l of quebrar(ctx, txt, 960, Math.max(1, Math.floor((1010 - y) / 48)))) { y += 48; ctx.fillText(l, 60, y); }
-    }
-    ctx.fillStyle = '#9ca3af'; ctx.font = '26px sans-serif';
-    ctx.fillText('FPV Campo · capa gerada pelo app', 60, 1055);
-    const blob = await new Promise<Blob | null>(r => c.toBlob(r, 'image/jpeg', 0.9));
-    return blob ? new File([blob], nome, { type: 'image/jpeg' }) : null;
-  } catch { return null; }
-};
-
-const completarAlbum = async (os: OSCampo, fotos: File[]): Promise<File[]> => {
-  if (fotos.length < 2 || fotos.length > 3) return fotos;
-  try {
-    const ref = refDaOS(os);
-    const status = STATUS_LEGENDA[os.status] || os.status || '';
-    const feito = String(os.servico ?? '').trim();
-    const capa = await cartao(`OS ${ref}`, `${status} · ${fotos.length} fotos`, [
-      ['Unidade', os.unidade || ''],
-      ['Local', String((os as any).local || '')],
-      ['Executante', os.executor || ''],
-      ['Data', br(os.conclusao || os.entrada)],
-    ], feito ? 'Executado' : 'Descrição', feito || String(os.solicitado ?? ''), `OS_CAPA_${ref}.jpg`);
-    if (!capa) return fotos;
-    const album = [capa, ...fotos];
-    if (fotos.length === 2) {
-      const temTxt = (s: string) => /[a-zA-ZÀ-ÿ0-9]/.test(s);
-      const mc = String(os.memoria_calculo ?? '').trim(), mat = String(os.materiais ?? '').trim();
-      const quant = [temTxt(mc) ? mc : '', temTxt(mat) && mat !== mc ? mat : ''].filter(Boolean).join('\n');
-      const ficha = await cartao(`OS ${ref}`, 'Quantificação', [['Executante', os.executor || '']],
-        quant ? 'Memória / material' : 'Pedido do fiscal', quant || String(os.solicitado ?? ''), `OS_FICHA_${ref}.jpg`);
-      if (!ficha) return fotos;          // sem a ficha não chega a 4: não vale a capa
-      album.push(ficha);
-    }
-    return album;
-  } catch { return fotos; }
-};
-
 export const prepararFotos = async (
   os: OSCampo,
   aoProgredir?: (feitas: number, total: number) => void,
 ): Promise<File[]> => {
   const urls = os.foto_urls || [];
   if (!urls.length) return [];
-  let fotos: File[] = [];
-  try { fotos = await buscarFotos(urls, refDaOS(os), aoProgredir); } catch { return []; }
-  return completarAlbum(os, fotos);
+  try { return await buscarFotos(urls, refDaOS(os), aoProgredir); } catch { return []; }
 };
 
 // NADA de await antes do nav.share. Se precisar mexer aqui, mantenha essa regra.
@@ -415,17 +321,11 @@ export const enviarOS = async (
   if (nav.share && fotos.length) {
     // REGRA DO RENAN (18/09): a legenda VAI SEMPRE junto com as fotos.
     // canShare é síncrono — não gasta a janela de ativação.
-    // v126: capa/ficha (OS_CAPA_/OS_FICHA_) só valem com TODAS as fotos
-    // reais junto. Se o aparelho cortar o lote, manda só as fotos — o corte
-    // nunca pode derrubar foto de verdade para caber a capa.
-    const reais = fotos.filter(f => !CARTAO.test(f.name));
-    let lote = maiorLoteAceito(nav, fotos);
-    if (lote.length < fotos.length && reais.length < fotos.length) lote = maiorLoteAceito(nav, reais);
+    const lote = maiorLoteAceito(nav, fotos);
     if (lote.length) {
-      const noLote = lote.filter(f => !CARTAO.test(f.name)).length;
-      const faltam = Math.max(0, totalUrls - noLote);
+      const faltam = Math.max(0, totalUrls - lote.length);
       const txt = faltam > 0
-        ? `${texto}\n\n_${noLote} de ${totalUrls} fotos — as outras ${faltam} estão no app._`
+        ? `${texto}\n\n_${lote.length} de ${totalUrls} fotos — as outras ${faltam} estão no app._`
         : texto;
       try {
         await nav.share({ text: txt, files: lote });        // <<< primeira coisa
