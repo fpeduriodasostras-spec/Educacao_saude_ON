@@ -364,7 +364,12 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
     const fechada = !!(ex.medicao || '').trim() && ex.medicao !== medDoMes();
     if (fechada && !ehGestor) { setMsg(`⛔ A O.S. ${refDaOS(ex)} está na medição FECHADA (${ex.medicao}) — só a gestão pode mexer. Avise no grupo.`); return false; }
     const { conflitos } = juntarComExistente(ex, osRef.current);
-    if (!osRef.current.id) setAntesDeCarregar(osRef.current);
+    if (!osRef.current.id) {
+      setAntesDeCarregar(osRef.current);
+      // o rascunho de "O.S. nova" já foi aproveitado nesta O.S.: sem isto, o
+      // próximo formulário novo ofereceria "Recuperar" com esse texto velho
+      try { localStorage.removeItem('fpv_rascunho_novo'); } catch { /* ok */ }
+    }
     setOs(prev => juntarComExistente(ex, prev).novo);
     setOsExistente(null);
     setMsg('');
@@ -752,10 +757,17 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="block text-[11px] font-bold uppercase text-stone-500 mb-1">Nº da O.S.</label>
+          {/* v127: sair da caixa procura a O.S. Depois de carregada pelo
+              número, a caixa TRAVA: trocar o número ali renumeraria a O.S.
+              do colega ao salvar — para trocar, "Não é esta O.S." */}
           <input type="number" value={os.numero ?? ''} onChange={e => campo('numero', e.target.value ? Number(e.target.value) : null)}
             onBlur={() => { void procurarNumero(); }}
+            readOnly={!!(antesDeCarregar && os.id)}
             placeholder={prefixoRef ? `vazio = gera ${prefixoRef}-nº` : 'vazio = gera F-nº'}
-            className="w-full border border-stone-200 rounded-lg px-3 py-2.5 text-sm bg-stone-50 outline-none focus:border-fpv-500" />
+            className={`w-full border border-stone-200 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-fpv-500 ${antesDeCarregar && os.id ? 'bg-stone-200 text-stone-600' : 'bg-stone-50'}`} />
+          {antesDeCarregar && os.id && (
+            <p className="text-[10px] text-stone-500 mt-1">número travado — errou? toque em "Não é esta O.S."</p>
+          )}
         </div>
         <div>
           <label className="block text-[11px] font-bold uppercase text-stone-500 mb-1">Data (edite se retroativo)</label>
