@@ -51,6 +51,15 @@ método AIOS: erro numerado nunca volta.
   ABRIR (v112): carrega a O.S. existente no formulário, aproveitando o que
   já foi digitado (campos vazios recebem o texto; nada do colega é
   sobrescrito; fotos anexadas/subidas vão junto).
+- **#27 Formulário montado com registro PELA METADE apaga dado no salvar.**
+  O ABRIR do bloqueio de duplicata usava o retorno de `numeroExiste` (só
+  id/número/escola/status) como se fosse a O.S. inteira: o formulário nascia
+  sem fotos, fiscal, classificação e pedido, e o UPDATE gravava isso por cima
+  (caso Abraão, O.S. 2985, 11/11 — 17 fotos e o fiscal apagados). Regra:
+  antes de virar EDIÇÃO, buscar a linha COMPLETA e ATUAL no banco pelo id
+  (`buscaPorId`); sem sinal, não monta. v127 também procura a O.S. assim que
+  o Nº é digitado (sair da caixa), e avisa quando o texto digitado NÃO entrou
+  porque a O.S. já tinha outro.
 
 ## Supabase / dados
 

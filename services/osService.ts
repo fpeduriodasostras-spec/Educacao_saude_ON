@@ -253,6 +253,32 @@ export const osService = {
     return data[0] as OSCampo;
   },
 
+  // v127: igual à de cima, mas diz quando NÃO conseguiu perguntar ao banco
+  // (sem sinal) — "não achei" e "não consegui procurar" são avisos diferentes
+  // para quem está digitando o número na escola.
+  async procuraNumero(n: number): Promise<OSCampo | null | 'erro'> {
+    const { data, error } = await supabase.from('os_campo')
+      .select('*').eq('numero', n).not('excluida', 'is', true)
+      .order('id', { ascending: true }).limit(1);
+    if (error) return 'erro';
+    if (!data || data.length === 0) return null;
+    return data[0] as OSCampo;
+  },
+
+  // v127 — a O.S. COMPLETA e ATUAL pelo id, direto do banco. O botão ABRIR
+  // montava o formulário com o que tinha na mão: às vezes só id/número/
+  // escola/status (vindo de numeroExiste) — e o salvar apagava fotos, fiscal,
+  // classificação e o pedido do fiscal (caso Abraão, O.S. 2985, 11/11).
+  // 'erro' = não deu para buscar (sem sinal): quem chama NÃO pode seguir com
+  // um registro pela metade.
+  async buscaPorId(id: number): Promise<OSCampo | null | 'erro'> {
+    const { data, error } = await supabase.from('os_campo')
+      .select('*').eq('id', id).limit(1);
+    if (error) return 'erro';
+    if (!data || data.length === 0) return null;
+    return data[0] as OSCampo;
+  },
+
   // NUMERAÇÃO POR EQUIPE (L01/M01…): calcula o próximo da equipe; o índice
   // único do banco derruba empate de 2 celulares e o salvarEquipe re-tenta.
   // Devolve null se a coluna fict_ref ainda não existe (fallback = F-nn).

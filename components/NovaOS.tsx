@@ -174,6 +174,9 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
     const snapInicial = JSON.stringify(osRef.current);
     (async () => {
       if (!p.numero) return;
+      // v127: o número do link já foi procurado aqui — sair da caixa do Nº
+      // depois não precisa procurar de novo (nem trocar o aviso de chegada)
+      numeroProcurado.current = Number(p.numero);
       const existente = await osService.buscaPorNumero(Number(p.numero));
       if (!existente) {
         setAvisoLink(`📥 O.S. ${p.numero} recebida do fiscal — confira os dados, registre a execução e mande pro grupo.`);
@@ -305,7 +308,7 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
     return novo;
   });
 
-  const limpar = () => { try { localStorage.removeItem(chaveRascunho); } catch { /* ok */ } setRascunho(null); setOs(vaziaPara(usuario)); setFotos([]); setKit({}); setKitAberto(false); setMsg(''); setUltimaSalva(null); setMsgShare(''); setLegendaPendente(null); setOsExistente(null); setAvisoLink(''); aoCancelarEdicao(); };
+  const limpar = () => { try { localStorage.removeItem(chaveRascunho); } catch { /* ok */ } setRascunho(null); setOs(vaziaPara(usuario)); setFotos([]); setKit({}); setKitAberto(false); setMsg(''); setUltimaSalva(null); setMsgShare(''); setLegendaPendente(null); setOsExistente(null); setAvisoLink(''); setAntesDeCarregar(null); numeroProcurado.current = null; aoCancelarEdicao(); };
 
   // v112 — ABRIR A O.S. QUE JÁ EXISTE, sem jogar fora o que foi digitado.
   // O caso real (Abraão, 24/09): 10 minutos de digitação, bloqueio de
@@ -317,29 +320,112 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
   // anexadas; fotos que já subiram entram na lista da O.S.
   // v120: recebe a O.S. direto (lista de "O.S. do fiscal nesta escola") ou
   // usa a da duplicata, como antes
-  const abrirParaCompletar = (alvo?: OSCampo) => {
-    const ex = alvo || osExistente;
-    if (!ex) return;
-    // mesma regra da LISTA: medição fechada é intocável para o campo
-    const fechada = !!(ex.medicao || '').trim() && ex.medicao !== medDoMes();
-    if (fechada && !ehGestor) { setMsg(`⛔ A O.S. ${refDaOS(ex)} está na medição FECHADA (${ex.medicao}) — só a gestão pode mexer. Avise no grupo.`); return; }
+  // v127 — DEFEITO DO ABRIR (caso Abraão, O.S. 2985, 11/11): quando o botão
+  // vinha do bloqueio de duplicata, a O.S. "existente" era só id/número/
+  // escola/status (numeroExiste). O formulário nascia sem fotos, fiscal,
+  // classificação e pedido do fiscal — e o SALVAR gravava isso por cima:
+  // 17 fotos e o fiscal apagados. Agora o ABRIR SEMPRE busca a O.S. inteira e
+  // atual no banco pelo id antes de montar o formulário; sem sinal, não monta.
+  //
+  // A junção: o registro do banco manda; o digitado só entra onde lá está
+  // vazio (regra da v112). Devolve também os campos em que o digitado NÃO
+  // entrou porque a O.S. já tinha outro texto — para avisar, não sumir calado.
+  const juntarComExistente = (ex: OSCampo, prev: OSCampo) => {
     const t = (v: any) => (v == null ? '' : String(v).trim());
-    setOs(prev => ({
-      ...ex,
+    const conflitos: string[] = [];
+    const pega = (rotulo: string, doBanco: any, digitado: any) => {
+      const a = t(doBanco), b = t(digitado);
+      if (a && b && a !== b) conflitos.push(rotulo);
+      return a || b;
+    };
+    const novo = {
+      ...normalizaOS(ex),
       unidade: t(ex.unidade), fiscal: t(ex.fiscal),
       classificacao: t(ex.classificacao), medicao: t(ex.medicao),
       status: t(ex.status) || 'Executando',
       executor: t(ex.executor) || prev.executor,
       solicitado: t(ex.solicitado) || prev.solicitado,
-      servico: t(ex.servico) || prev.servico,
-      materiais: t(ex.materiais) || prev.materiais,
-      memoria_calculo: t(ex.memoria_calculo) || prev.memoria_calculo,
+      local: t(ex.local) || t(prev.local),
+      servico: pega('SERVIÇO EXECUTADO', ex.servico, prev.servico),
+      materiais: pega('MATERIAIS', ex.materiais, prev.materiais),
+      memoria_calculo: pega('MEMÓRIA', ex.memoria_calculo, prev.memoria_calculo),
       // fotos que a pessoa já tinha subido (caso "corrida") não se perdem
       foto_urls: [...new Set([...(ex.foto_urls || []), ...(prev.foto_urls || [])])],
-    } as OSCampo));
+    } as OSCampo;
+    return { novo, conflitos };
+  };
+
+  // o formulário como estava ANTES de carregar uma O.S. pelo número — para o
+  // botão "não é esta" devolver tudo o que a pessoa tinha digitado
+  const [antesDeCarregar, setAntesDeCarregar] = useState<OSCampo | null>(null);
+
+  const carregarExistente = (ex: OSCampo, aviso: string): boolean => {
+    // mesma regra da LISTA: medição fechada é intocável para o campo
+    const fechada = !!(ex.medicao || '').trim() && ex.medicao !== medDoMes();
+    if (fechada && !ehGestor) { setMsg(`⛔ A O.S. ${refDaOS(ex)} está na medição FECHADA (${ex.medicao}) — só a gestão pode mexer. Avise no grupo.`); return false; }
+    const { conflitos } = juntarComExistente(ex, osRef.current);
+    if (!osRef.current.id) setAntesDeCarregar(osRef.current);
+    setOs(prev => juntarComExistente(ex, prev).novo);
     setOsExistente(null);
     setMsg('');
-    setAvisoLink(`✏️ Completando a O.S. ${refDaOS(ex)} (${ex.unidade}). O que você tinha digitado foi aproveitado — confira e SALVE.`);
+    setAvisoLink(aviso + (conflitos.length
+      ? ` ⚠️ Esta O.S. já tinha ${conflitos.join(', ')} preenchido — o que você digitou nesse campo NÃO entrou. Confira antes de salvar.`
+      : ''));
+    return true;
+  };
+
+  const [abrindo, setAbrindo] = useState(false);
+  const abrirParaCompletar = async (alvo?: OSCampo) => {
+    const base = alvo || osExistente;
+    if (!base || base.id == null || abrindo) return;
+    setAbrindo(true);
+    setMsg(`carregando a O.S. ${refDaOS(base)} completa…`);
+    const r = await osService.buscaPorId(base.id);
+    setAbrindo(false);
+    setMsg('');
+    if (r === 'erro') { setMsg(`📶 Não consegui carregar a O.S. ${refDaOS(base)} agora (sem sinal?). NADA foi mudado — toque em ABRIR de novo daqui a pouco.`); return; }
+    if (!r || r.excluida) { setMsg(`⛔ A O.S. ${refDaOS(base)} está EXCLUÍDA no app — não dá para completar por aqui. Fale com a gestão.`); return; }
+    carregarExistente(r, `✏️ Completando a O.S. ${refDaOS(r)} (${r.unidade}). O que você tinha digitado foi aproveitado — confira e SALVE.`);
+  };
+
+  // v127 — PEDIDO DO LEONY (11/11): digitou o Nº da O.S. e saiu da caixa → o
+  // app já procura no banco e, se ela existe, traz TUDO dela (escola, fiscal,
+  // pedido, fotos, o que o colega já lançou) — o mesmo que o link do fiscal
+  // faz. Some o caminho "salvar → bloqueio de duplicata → ABRIR", onde estava
+  // o defeito acima. O bloqueio no SALVAR continua como rede de segurança
+  // (quem tocar em salvar direto, sem sair da caixa).
+  const numeroProcurado = useRef<number | null>(null);
+  const procurarNumero = async () => {
+    const atual = osRef.current;
+    const n = Number(atual.numero);
+    if (atual.id || !n || n <= 0) return;        // edição, ou caixa vazia
+    if (numeroProcurado.current === n) return;    // este número já foi procurado
+    numeroProcurado.current = n;
+    setMsg(`procurando a O.S. ${n}…`);
+    const r = await osService.procuraNumero(n);
+    // a pessoa trocou o número (ou abriu outra O.S.) enquanto procurava
+    if (Number(osRef.current.numero) !== n || osRef.current.id) { setMsg(''); return; }
+    setMsg('');
+    if (r === 'erro') {
+      numeroProcurado.current = null;             // deixa tentar de novo
+      setAvisoLink(`📶 Não consegui conferir a O.S. ${n} agora (sem sinal?). Pode seguir preenchendo: ao SALVAR o app confere de novo.`);
+      return;
+    }
+    if (!r) {
+      setAvisoLink(`🔎 A O.S. ${n} ainda NÃO está no app. Confira o número no link ou no papel do fiscal — se estiver certo, preencha e salve normalmente.`);
+      return;
+    }
+    carregarExistente(r, `✏️ A O.S. ${n} já está no sistema — ${r.unidade} · ${r.status}${(r.fiscal || '').trim() ? ` · fiscal ${r.fiscal}` : ''}. Os dados dela foram carregados: complete a execução e SALVE.`);
+  };
+
+  // "não é esta O.S." — volta o formulário exatamente como estava antes
+  const desfazerCarga = () => {
+    if (!antesDeCarregar) return;
+    setOs({ ...antesDeCarregar, numero: null });
+    setAntesDeCarregar(null);
+    numeroProcurado.current = null;
+    setAvisoLink('');
+    setMsg('Pronto: voltou como estava. Digite o número certo (ou deixe vazio).');
   };
 
   const mudaKit = (descricao: string, delta: number) =>
@@ -571,6 +657,8 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
     setLegendaPendente(null);   // v110: pendência de cópia era da O.S. anterior
     try { localStorage.removeItem(chaveRascunho); } catch { /* ok */ }
     setRascunho(null);
+    setAntesDeCarregar(null);       // v127
+    numeroProcurado.current = null; // v127
     setOs(vaziaPara(usuario));
     setFotos([]);
     setKit({});
@@ -596,9 +684,17 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
           aproveitando o que a pessoa digitou (a LISTA do campo restrito
           não mostra a O.S. dos outros; este botão não depende dela) */}
       {osExistente && (
-        <button type="button" onClick={() => abrirParaCompletar()}
-          className="w-full bg-sky-600 active:bg-sky-700 text-white font-bold py-3 rounded-xl text-sm">
-          ✏️ ABRIR a O.S. {refDaOS(osExistente)} ({osExistente.unidade}) e completar — sem perder o que digitei
+        <button type="button" onClick={() => { void abrirParaCompletar(); }} disabled={abrindo}
+          className="w-full bg-sky-600 active:bg-sky-700 disabled:opacity-60 text-white font-bold py-3 rounded-xl text-sm">
+          {abrindo ? 'carregando a O.S. completa…' : `✏️ ABRIR a O.S. ${refDaOS(osExistente)} (${osExistente.unidade}) e completar — sem perder o que digitei`}
+        </button>
+      )}
+      {/* v127: carregou a O.S. pelo número digitado? se era o número errado,
+          volta o formulário exatamente como estava (nada digitado se perde) */}
+      {antesDeCarregar && os.id && (
+        <button type="button" onClick={desfazerCarga}
+          className="w-full bg-white border border-stone-300 active:bg-stone-100 text-stone-700 font-bold py-2.5 rounded-xl text-xs">
+          ↩ Não é esta O.S. — voltar como eu estava
         </button>
       )}
       {/* v111: o link do fiscal abre DENTRO do WhatsApp, onde o envio de
@@ -657,6 +753,7 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
         <div>
           <label className="block text-[11px] font-bold uppercase text-stone-500 mb-1">Nº da O.S.</label>
           <input type="number" value={os.numero ?? ''} onChange={e => campo('numero', e.target.value ? Number(e.target.value) : null)}
+            onBlur={() => { void procurarNumero(); }}
             placeholder={prefixoRef ? `vazio = gera ${prefixoRef}-nº` : 'vazio = gera F-nº'}
             className="w-full border border-stone-200 rounded-lg px-3 py-2.5 text-sm bg-stone-50 outline-none focus:border-fpv-500" />
         </div>
@@ -702,8 +799,9 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
                   {` · ${c.status}`}
                   {(c.solicitado || '').trim() && <span className="block truncate text-stone-500">{c.solicitado}</span>}
                 </div>
-                <button type="button" onClick={() => { abrirParaCompletar(c); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-                  className="shrink-0 bg-sky-600 active:bg-sky-700 text-white font-bold text-[12px] px-3 py-2 rounded-lg">
+                <button type="button" disabled={abrindo}
+                  onClick={() => { void abrirParaCompletar(c); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                  className="shrink-0 bg-sky-600 active:bg-sky-700 disabled:opacity-60 text-white font-bold text-[12px] px-3 py-2 rounded-lg">
                   ABRIR
                 </button>
               </div>
