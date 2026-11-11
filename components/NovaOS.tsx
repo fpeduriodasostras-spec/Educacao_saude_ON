@@ -7,7 +7,7 @@ import { KIT_EMERGENCIAL } from '../data/materiais';
 import { guiaMedida } from '../data/areas';
 import { VOZ_ATIVA, GESTORES, EQUIPES, CORRETIVA, DOIS_CONTRATOS, medDoMes, hojeLocal } from '../config';
 import { osService } from '../services/osService';
-import { compartilharOS, prepararFotos, enviarOS, legendaOS, copiarLegenda, navegadorEmbutido, motivoDoUltimoErro } from '../services/compartilhar';
+import { compartilharOS, prepararFotos, enviarOS, legendaOS, copiarLegenda, navegadorEmbutido, motivoDoUltimoErro, fotosQueFaltam, enviarFotosQueFaltam, descartarFotosQueFaltam } from '../services/compartilhar';
 import { deepLinkPrefill, consomeDeepLink } from '../services/deepLink';
 
 const normaliza = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, '');
@@ -110,6 +110,8 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
   // EDIÇÃO — o texto do painel muda ("corrigiu… mandar a versão certa?")
   const [salvaFoiEdicao, setSalvaFoiEdicao] = useState(false);
   const [compartilhando, setCompartilhando] = useState(false); // v87: anti duplo-toque no share
+  // v128: o celular só aceitou parte das fotos — quantas faltam mandar
+  const [faltamFotos, setFaltamFotos] = useState(0);
   const emShare = useRef(false);   // v106: a trava de verdade — o estado chega tarde demais
   // v110: quando o aparelho recusa a folha E a cópia automática falha, a
   // legenda fica aqui esperando um TOQUE NOVO no botão "copiar legenda" —
@@ -254,6 +256,9 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
     fotosProntas.current = null;
     setFotosNoPonto(0);
     setPreparo('nada');
+    // v128: O.S. nova (ou cartão fechado): o resto de fotos da anterior não vale
+    descartarFotosQueFaltam();
+    setFaltamFotos(0);
     if (!ultimaSalva) return;
     const n = ultimaSalva.foto_urls?.length || 0;
     if (!n) return;                          // O.S. sem foto: nada a preparar
@@ -1092,7 +1097,7 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
             {/* v87: TRAVA o botão enquanto prepara — o Renato clicou várias
                 vezes achando que travou, e cada clique baixava as fotos de
                 novo. Agora mostra o progresso foto a foto. */}
-            <button type="button" disabled={compartilhando || preparo === 'baixando'} onClick={async () => {
+            <button type="button" disabled={compartilhando || preparo === 'baixando' || faltamFotos > 0} onClick={async () => {
               // v106: a trava do `disabled` sozinha NAO basta. setState do React
               // e assincrono: dois toques no mesmo frame enxergam
               // compartilhando=false e passam os DOIS — cada um abrindo uma
@@ -1140,7 +1145,10 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
                 // a legenda e o app garantiu que as fotos tinham ido.
                 r === 'compartilhado' && n === 0 ? '⚠️ foi SÓ A LEGENDA — esta O.S. não tem NENHUMA foto salva. As fotos não subiram; edite a O.S. e anexe de novo.' :
                 r === 'compartilhado' ? `✔ enviado: cartão da O.S. + ${n} foto(s), num álbum só` :
+                // v128: o resto das fotos vai pelo botão ENVIAR AS OUTRAS (toque novo)
+                r === 'compartilhado-parcial' && fotosQueFaltam() > 0 ? `✔ foi a legenda com as primeiras fotos — este celular não aceita todas de uma vez. FALTAM ${fotosQueFaltam()}: toque em "ENVIAR AS OUTRAS" aqui embaixo e escolha o MESMO grupo.` :
                 r === 'compartilhado-parcial' ? `⚠️ foi o cartão e PARTE das fotos — este aparelho não aceita o lote inteiro. Mande as que faltam pela galeria.` :
+                r === 'tentar-de-novo' ? `⚠️ NADA foi enviado ainda: este celular não aceita ${n} fotos de uma vez. Toque de novo em ENVIAR — vai a legenda com as fotos que ele aceita, e depois aparece um botão para as outras.` :
                 // v103: esta linha agora cobre DUAS causas — o aparelho não
                 // aceitar anexo, e as fotos não terem baixado do servidor.
                 // Antes o segundo caso mentia "✔ enviado com todas as fotos".
@@ -1157,6 +1165,7 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
                 r === 'cancelado' ? '' : `❌ NADA foi enviado — o aparelho recusou o compartilhamento e a legenda NÃO foi copiada. Toque em COPIAR LEGENDA abaixo, cole no grupo e mande as fotos pela galeria.${motivoDoUltimoErro() ? ` (motivo: ${motivoDoUltimoErro()})` : ''}`
               );
               if (r === 'erro') setLegendaPendente(legendaOS(ultimaSalva, medDoMes()));
+              setFaltamFotos(fotosQueFaltam());   // v128: liga o botão das que faltam
               // só some sozinho quando foi tudo; se faltou foto, o aviso fica
               // na tela até ele fechar (v103: O.S. vazia também segura o aviso)
               if (r === 'compartilhado' && n > 0) setTimeout(() => { setUltimaSalva(null); setMsgShare(''); setLegendaPendente(null); }, 1200);
@@ -1174,6 +1183,32 @@ const NovaOS: React.FC<Props> = ({ editando, usuario, aoSalvar, aoCancelarEdicao
             <button type="button" onClick={() => { setUltimaSalva(null); setMsgShare(''); setLegendaPendente(null); }}
               className="px-4 border border-stone-300 rounded-xl text-sm font-bold text-stone-600">agora não</button>
           </div>
+          {/* v128: o celular aceitou só parte das fotos. Cada toque aqui abre a
+              folha com mais um lote (o que ele aceita), com uma linha dizendo
+              de qual O.S. e quais fotos são. Toque NOVO = o navegador deixa. */}
+          {faltamFotos > 0 && (
+            <button type="button" disabled={compartilhando} onClick={async () => {
+              if (emShare.current) return;
+              emShare.current = true;
+              setCompartilhando(true);
+              let r2: any = 'erro';
+              try { r2 = await enviarFotosQueFaltam(); }
+              catch { r2 = 'erro'; }
+              finally { emShare.current = false; setCompartilhando(false); }
+              const resta = fotosQueFaltam();
+              setFaltamFotos(resta);
+              setMsgShare(
+                r2 === 'compartilhado' ? '✔ pronto: TODAS as fotos foram para o grupo.' :
+                r2 === 'compartilhado-parcial' ? `✔ foram mais fotos. FALTAM ${resta}: toque de novo e escolha o MESMO grupo.` :
+                r2 === 'tentar-de-novo' ? `⚠️ o celular recusou esse tanto de fotos — toque de novo: agora vai menos por vez.` :
+                r2 === 'cancelado' ? `faltam ${resta} foto(s) — toque quando quiser mandar.` :
+                `❌ essas fotos NÃO foram${motivoDoUltimoErro() ? ` (motivo: ${motivoDoUltimoErro()})` : ''}. Toque de novo, ou mande as que faltam pela galeria.`
+              );
+              if (r2 === 'compartilhado') setTimeout(() => { setUltimaSalva(null); setMsgShare(''); setLegendaPendente(null); }, 1500);
+            }} className="w-full bg-emerald-600 active:bg-emerald-700 disabled:bg-stone-300 text-white font-bold py-2.5 rounded-xl text-sm flex items-center justify-center gap-2">
+              {compartilhando ? <><Loader2 size={15} className="animate-spin" /> enviando…</> : `📷 ENVIAR AS OUTRAS ${faltamFotos} FOTOS (mesmo grupo)`}
+            </button>
+          )}
           {msgShare && <p className="text-[11px] text-stone-500">{msgShare}</p>}
           {/* v110: a cópia automática falhou — este botão é um toque NOVO, e
               com toque novo o navegador aceita escrever na área de

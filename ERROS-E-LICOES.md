@@ -60,6 +60,15 @@ método AIOS: erro numerado nunca volta.
   (`buscaPorId`); sem sinal, não monta. v127 também procura a O.S. assim que
   o Nº é digitado (sair da caixa), e avisa quando o texto digitado NÃO entrou
   porque a O.S. já tinha outro.
+- **#28 canShare "sim" não garante que o share passa.** Alguns celulares
+  recusam lote grande NA HORA ("NotAllowedError: Permission denied") com o
+  canShare aprovando — e NÃO é regra do Chrome: no mesmo dia (11/11) um
+  Android mandou 26 fotos e outro não mandou 18 (2985 do Abraão; o do Renato
+  recusa toda O.S. com mais de 10 fotos desde setembro). v128: o app aprende
+  o teto de CADA aparelho (localStorage `fpv_teto_share` = 10, só quando ele
+  recusa MAIS de 10),
+  tenta de novo na hora com o lote menor e manda o resto num botão "ENVIAR AS
+  OUTRAS" (toque novo). Quem aceita tudo segue mandando tudo de uma vez.
 
 ## Supabase / dados
 

@@ -1270,6 +1270,8 @@ const AlmoxOS: React.FC<{ listaOS: OSCampo[]; ehGestor?: boolean; usuario?: stri
                   r === 'copiado' ? '📋 legenda copiada — cole no grupo' :
                   r === 'navegador-embutido' ? '⚠️ NADA foi enviado: o app está aberto no navegador de DENTRO do WhatsApp. A saída está SALVA — abra o app pelo ÍCONE (ou ⋮ → "Abrir no Chrome") para compartilhar.' :
                   r === 'erro-copiado' ? `❌ NADA foi enviado — o aparelho recusou. A legenda está copiada: cole no grupo e mande as fotos pela galeria.${motivo}` :
+                  // v128: o celular recusou o lote; o teto dele ficou guardado
+                  r === 'tentar-de-novo' ? '⚠️ NADA foi enviado ainda: este celular não aceita tantas fotos de uma vez. Toque de novo — vai com menos fotos.' :
                   r === 'cancelado' ? '' :
                   `❌ NADA foi enviado e a legenda NÃO foi copiada. Toque em COPIAR LEGENDA abaixo e cole no grupo.${motivo}`
                 );

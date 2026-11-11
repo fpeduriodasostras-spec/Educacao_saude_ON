@@ -215,6 +215,8 @@ export type ResultadoShare =
   | 'copiado' | 'cancelado'
   | 'navegador-embutido'   // app aberto DENTRO do WhatsApp/Instagram — share não existe lá
   | 'erro-copiado'         // a folha foi recusada, MAS a legenda está na área de transferência
+  | 'tentar-de-novo'       // v128: o celular recusou o lote grande; o teto dele foi
+                           //        guardado — o PRÓXIMO toque manda legenda + o que cabe
   | 'erro';                // a folha foi recusada E a cópia falhou — NADA ficou no aparelho
 
 // v111 — NAVEGADOR EMBUTIDO (o "navegador de dentro" do WhatsApp/Instagram).
@@ -272,10 +274,35 @@ export const copiarLegenda = async (txt: string): Promise<boolean> => {
 // que aceita 12 mandava 10, perdendo 2 fotos que caberiam. Agora desce de
 // um em um e acha o teto exato. São no máximo 15 chamadas síncronas e
 // baratas: não pesa no celular.
+// v128 — O TETO QUE O canShare NÃO CONTA. Alguns celulares recusam lote grande
+// NA HORA DO ENVIO ("NotAllowedError: Permission denied") mesmo com o canShare
+// dizendo "sim". Não é todo Android: no mesmo dia o João Paulo mandou 26 fotos
+// num álbum só e o Abraão não conseguiu mandar 18 (2985, 11/11); o celular do
+// Renato recusa TODA O.S. com mais de 10 fotos (2661…2919). Então o app
+// APRENDE o teto de cada aparelho: na 1ª recusa guarda um teto menor neste
+// celular (10) e tenta de novo com ele. Quem aceita tudo
+// continua mandando tudo de uma vez — para esses nada muda.
+const CHAVE_TETO = 'fpv_teto_share';
+const LOTE_SEGURO = 10;
+const tetoDoAparelho = (): number => {
+  try {
+    const v = parseInt(localStorage.getItem(CHAVE_TETO) || '', 10);
+    return v > 0 ? v : Infinity;
+  } catch { return Infinity; }
+};
+const guardaTeto = (n: number) => { try { localStorage.setItem(CHAVE_TETO, String(n)); } catch { /* sem espaço: segue */ } };
+// recusa por TAMANHO do lote (e não por toque vencido, que tem outra mensagem).
+// Só conta acima de 10: foi onde as recusas apareceram de verdade. Recusa com
+// 10 ou menos é outro problema — segue o caminho de erro de antes, em vez de
+// deixar o celular mandando foto picada para sempre por causa de uma falha solta.
+const recusaDeLote = (e: any, tamanho: number) =>
+  e?.name === 'NotAllowedError' && tamanho > LOTE_SEGURO && !/gesture|activation/i.test(String(e?.message || ''));
+const tetoMenor = (_tamanho: number) => LOTE_SEGURO;
+
 const maiorLoteAceito = (nav: any, files: File[]): File[] => {
   if (!files.length) return [];
   if (!nav.canShare) return [];           // aparelho sem suporte a arquivo
-  for (let n = files.length; n >= 1; n--) {
+  for (let n = Math.min(files.length, tetoDoAparelho()); n >= 1; n--) {
     const lote = files.slice(0, n);
     try { if (nav.canShare({ files: lote })) return lote; } catch { /* tenta com uma a menos */ }
   }
@@ -311,37 +338,75 @@ export const prepararFotos = async (
   try { return await buscarFotos(urls, refDaOS(os), aoProgredir); } catch { return []; }
 };
 
+// v128 — AS FOTOS QUE FALTARAM. Quando o celular só aceita parte do lote, a
+// 1ª mensagem leva a legenda + o que coube, e as fotos restantes ficam aqui
+// esperando um TOQUE NOVO (o navegador só abre a folha logo depois de um
+// toque) no botão "ENVIAR AS OUTRAS N FOTOS" — no mesmo grupo.
+let pendentes: { cabecalho: string; fotos: File[]; total: number; jaForam: number } | null = null;
+export const fotosQueFaltam = (): number => pendentes?.fotos.length || 0;
+export const descartarFotosQueFaltam = () => { pendentes = null; };
+
+// legenda da 1ª mensagem quando não vai tudo: diz o que foi e o que vem depois
+const txtParcial = (texto: string, foram: number, total: number, vemDepois: boolean) =>
+  vemDepois
+    ? `${texto}\n\n_Fotos 1 a ${foram} de ${total} — as outras vão na mensagem seguinte._`
+    : `${texto}\n\n_${foram} de ${total} fotos — as outras ${total - foram} estão no app._`;
+
 // NADA de await antes do nav.share. Se precisar mexer aqui, mantenha essa regra.
 export const enviarOS = async (
   texto: string, fotos: File[], totalUrls: number,
 ): Promise<ResultadoShare> => {
   const nav = navigator as any;
   motivoErro = '';
+  pendentes = null;   // envio novo: o resto de uma O.S. anterior não vale mais
 
   if (nav.share && fotos.length) {
     // REGRA DO RENAN (18/09): a legenda VAI SEMPRE junto com as fotos.
     // canShare é síncrono — não gasta a janela de ativação.
     const lote = maiorLoteAceito(nav, fotos);
     if (lote.length) {
-      const faltam = Math.max(0, totalUrls - lote.length);
-      const txt = faltam > 0
-        ? `${texto}\n\n_${lote.length} de ${totalUrls} fotos — as outras ${faltam} estão no app._`
-        : texto;
-      try {
-        await nav.share({ text: txt, files: lote });        // <<< primeira coisa
+      // manda `l` fotos com a legenda; o que sobrar das baixadas fica pendente
+      const enviar = async (l: File[]): Promise<ResultadoShare> => {
+        const resto = fotos.slice(l.length);
+        const faltam = Math.max(0, totalUrls - l.length);
+        const txt = faltam > 0 ? txtParcial(texto, l.length, totalUrls, resto.length > 0) : texto;
+        await nav.share({ text: txt, files: l });
         // só depois de a folha ter aberto: a legenda na área de transferência,
         // para o caso de o aparelho engolir o texto
         copiarLegenda(txt);   // backup silencioso: se falhar, o envio já foi
+        if (resto.length) {
+          pendentes = { cabecalho: (texto.split('\n')[0] || '').trim(), fotos: resto, total: totalUrls, jaForam: l.length };
+        }
         return faltam > 0 ? 'compartilhado-parcial' : 'compartilhado';
+      };
+      try {
+        return await enviar(lote);                          // <<< primeira coisa
       } catch (e: any) {
         if (e?.name === 'AbortError') return 'cancelado';   // usuário fechou a folha
         motivoErro = `${e?.name || 'Erro'}: ${e?.message || e}`;
         // share existe mas foi recusado DENTRO de um navegador embutido:
         // o conserto não é tentar de novo, é abrir o app no Chrome/ícone
-        if (navegadorEmbutido()) { copiarLegenda(txt); return 'navegador-embutido'; }
+        if (navegadorEmbutido()) { copiarLegenda(texto); return 'navegador-embutido'; }
+        // v128: recusou o TAMANHO do lote → este celular ganha um teto menor
+        // (fica guardado nele) e tenta JÁ com o lote menor. Nada foi enviado
+        // na 1ª tentativa, então não há risco de mensagem repetida no grupo.
+        if (recusaDeLote(e, lote.length)) {
+          const teto = tetoMenor(lote.length);
+          guardaTeto(teto);
+          try {
+            const r = await enviar(lote.slice(0, teto));
+            motivoErro = '';
+            return r;
+          } catch (e2: any) {
+            if (e2?.name === 'AbortError') return 'cancelado';
+            // o navegador gastou o toque na 1ª tentativa: o PRÓXIMO toque já
+            // sai com o teto novo (as fotos continuam prontas na tela)
+            return 'tentar-de-novo';
+          }
+        }
         // recusou: NÃO abre uma segunda folha. E o retorno DIZ se a legenda
         // ficou copiada de verdade — 'erro' seco significa que NADA ficou.
-        return (await copiarLegenda(txt)) ? 'erro-copiado' : 'erro';
+        return (await copiarLegenda(texto)) ? 'erro-copiado' : 'erro';
       }
     }
   }
@@ -367,6 +432,33 @@ export const enviarOS = async (
   // desktop: copia a legenda (as fotos o gestor pega no app/relatório)
   if (await copiarLegenda(texto)) return 'copiado';
   try { window.prompt('Copie a legenda:', texto); return 'copiado'; } catch { return 'erro'; }
+};
+
+// v128 — 2º (3º…) toque: manda as fotos que faltaram, no máximo o que este
+// celular aceita, com uma linha curta dizendo de qual O.S. e quais fotos são.
+// Mesma regra de ouro: NADA de await antes do nav.share.
+export const enviarFotosQueFaltam = async (): Promise<ResultadoShare> => {
+  const nav = navigator as any;
+  motivoErro = '';
+  const p = pendentes;
+  if (!p || !p.fotos.length || !nav.share) return 'erro';
+  const lote = maiorLoteAceito(nav, p.fotos);
+  if (!lote.length) return 'erro';
+  const de = p.jaForam + 1, ate = p.jaForam + lote.length;
+  const txt = `${p.cabecalho}\n_Fotos ${de} a ${ate} de ${p.total}_`;
+  try {
+    await nav.share({ text: txt, files: lote });            // <<< primeira coisa
+    p.fotos = p.fotos.slice(lote.length);
+    p.jaForam = ate;
+    if (!p.fotos.length) pendentes = null;
+    return pendentes ? 'compartilhado-parcial' : 'compartilhado';
+  } catch (e: any) {
+    if (e?.name === 'AbortError') return 'cancelado';       // fotos continuam pendentes
+    motivoErro = `${e?.name || 'Erro'}: ${e?.message || e}`;
+    // recusou o tamanho: guarda o teto menor; o próximo toque já sai com ele
+    if (recusaDeLote(e, lote.length)) { guardaTeto(tetoMenor(lote.length)); return 'tentar-de-novo'; }
+    return 'erro';
+  }
 };
 
 // Compartilha no grupo: no celular abre a folha nativa (WhatsApp, e-mail…)

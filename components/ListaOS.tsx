@@ -3,7 +3,7 @@ import { Pencil, Trash2, Siren, Search, CheckCircle2, Hash, Lock, ChevronDown, C
 import { OSCampo, refDaOS, MED_OPTIONS, buscaNorm } from '../types';
 import { medDoMes, hojeLocal, DESIGNADOS } from '../config';
 import { osService } from '../services/osService';
-import { compartilharOS, prepararFotos, enviarOS, legendaOS, motivoDoUltimoErro } from '../services/compartilhar';
+import { compartilharOS, prepararFotos, enviarOS, legendaOS, motivoDoUltimoErro, fotosQueFaltam, enviarFotosQueFaltam, descartarFotosQueFaltam } from '../services/compartilhar';
 import { supabase } from '../services/supabaseClient';
 
 interface Props {
@@ -89,6 +89,7 @@ const ListaOS: React.FC<Props> = ({ lista, aoEditar, aoMudar, filtroMinhas, rotu
   const [progShare, setProgShare] = useState('');
   const emShare = useRef(false);
   const [prontoId, setProntoId] = useState<number | null>(null);   // v108: qual O.S. já está com as fotos na mão
+  const [faltamId, setFaltamId] = useState<number | null>(null);   // v128: O.S. com fotos que ainda faltam mandar
   const fotosProntas = useRef<File[] | null>(null);
   const mudarMedicao = async (os: OSCampo, med: string) => {
     if (med === (os.medicao || '')) return;
@@ -195,14 +196,44 @@ const ListaOS: React.FC<Props> = ({ lista, aoEditar, aoMudar, filtroMinhas, rotu
     // toques no mesmo instante enxergariam o estado antigo e passariam os dois
     if (emShare.current) return;
 
+    // v128: o celular só aceitou parte das fotos desta O.S. — este toque manda
+    // o próximo lote (sem nenhum await antes da folha)
+    if (faltamId === os.id && fotosQueFaltam() > 0) {
+      emShare.current = true;
+      let r2: any = 'erro';
+      try { r2 = await enviarFotosQueFaltam(); } catch { r2 = 'erro'; }
+      finally { emShare.current = false; }
+      const resta = fotosQueFaltam();
+      if (!resta) setFaltamId(null);
+      setProgShare(resta ? `faltam ${resta} foto(s) — toque para ENVIAR AS OUTRAS` : '');
+      if (r2 === 'compartilhado') alert('✔ Pronto: TODAS as fotos foram para o grupo.');
+      if (r2 === 'tentar-de-novo') alert('⚠️ O celular recusou esse tanto de fotos. Toque de novo no botão de compartilhar desta O.S.: agora vai menos por vez.');
+      if (r2 === 'erro') alert(`❌ Essas fotos NÃO foram${motivoDoUltimoErro() ? ` (motivo: ${motivoDoUltimoErro()})` : ''}. Toque de novo, ou mande as que faltam pela galeria.`);
+      return;
+    }
+    // outra O.S.: o resto de fotos da anterior não vale mais
+    if (faltamId !== null) { descartarFotosQueFaltam(); setFaltamId(null); }
+
     // 2º toque: já está preparada — ENVIA AGORA, sem nenhum await antes
     if (prontoId === os.id && fotosProntas.current) {
       const leg = legendaOS(os, medDoMes());
       emShare.current = true;
+      let r: any = 'erro';
       try {
-        avisar(await enviarOS(leg, fotosProntas.current, os.foto_urls?.length || 0), leg);
+        r = await enviarOS(leg, fotosProntas.current, os.foto_urls?.length || 0);
+        avisar(r, leg);
       } catch { avisar('erro', leg); }
-      finally { emShare.current = false; fotosProntas.current = null; setProntoId(null); }
+      finally {
+        emShare.current = false;
+        // v128: 'tentar-de-novo' = nada foi, o teto do celular ficou guardado —
+        // as fotos CONTINUAM prontas e o próximo toque já sai com o lote certo
+        if (r !== 'tentar-de-novo') { fotosProntas.current = null; setProntoId(null); }
+      }
+      if (r === 'compartilhado-parcial' && fotosQueFaltam() > 0) {
+        setFaltamId(os.id ?? null);
+        setProgShare(`faltam ${fotosQueFaltam()} foto(s) — toque para ENVIAR AS OUTRAS`);
+      }
+      if (r === 'tentar-de-novo') setProgShare('toque de novo para ENVIAR');
       return;
     }
 
@@ -265,7 +296,10 @@ const ListaOS: React.FC<Props> = ({ lista, aoEditar, aoMudar, filtroMinhas, rotu
     // v103: agora cobre também o caso de as fotos não terem BAIXADO do
     // servidor — que antes caía num "✔ enviado" mentiroso.
     if (r === 'compartilhado-sem-fotos') alert('⚠️ Só o TEXTO foi compartilhado — NENHUMA foto chegou no grupo.\n\nOu as fotos não baixaram (sinal fraco), ou este aparelho não aceita anexo. Mande as fotos pela galeria do celular, no mesmo grupo.');
-    if (r === 'compartilhado-parcial') alert('⚠️ Foi o cartão da O.S. e só PARTE das fotos.\n\nEste aparelho não aceitou o lote inteiro. Confira no grupo quantas chegaram e mande o resto pela galeria.');
+    // v128: com fotos pendentes, o resto vai pelo MESMO botão (toque novo)
+    if (r === 'compartilhado-parcial' && fotosQueFaltam() > 0) alert(`✔ Foi a legenda com as primeiras fotos — este celular não aceita todas de uma vez.\n\nFALTAM ${fotosQueFaltam()}: toque de novo no botão de compartilhar desta O.S. (ficou verde) e escolha o MESMO grupo.`);
+    else if (r === 'compartilhado-parcial') alert('⚠️ Foi o cartão da O.S. e só PARTE das fotos.\n\nEste aparelho não aceitou o lote inteiro. Confira no grupo quantas chegaram e mande o resto pela galeria.');
+    if (r === 'tentar-de-novo') alert('⚠️ NADA foi enviado ainda: este celular não aceita tantas fotos de uma vez.\n\nToque de novo no botão de compartilhar desta O.S.: vai a legenda com as fotos que ele aceita, e depois o mesmo botão manda as outras.');
   };
 
   // MEDIÇÃO FECHADA = intocável (spec do engenheiro): só a vigente edita.
@@ -528,11 +562,11 @@ const ListaOS: React.FC<Props> = ({ lista, aoEditar, aoMudar, filtroMinhas, rotu
                           folha de compartilhamento dentro do toque, e baixar as
                           fotos estourava esse prazo */}
                       <button onClick={() => compartilhar(os)} disabled={compartilhandoId !== null}
-                        title={compartilhandoId === os.id ? progShare : (prontoId === os.id ? 'Fotos prontas — toque para ENVIAR' : 'Compartilhar no grupo (legenda + fotos)')}
-                        className={`p-1.5 rounded-lg disabled:opacity-40 ${prontoId === os.id ? 'text-white bg-fpv-600' : 'text-stone-400 hover:text-fpv-600 hover:bg-fpv-50'}`}>
+                        title={compartilhandoId === os.id ? progShare : (faltamId === os.id ? 'Faltam fotos — toque para ENVIAR AS OUTRAS' : prontoId === os.id ? 'Fotos prontas — toque para ENVIAR' : 'Compartilhar no grupo (legenda + fotos)')}
+                        className={`p-1.5 rounded-lg disabled:opacity-40 ${faltamId === os.id ? 'text-white bg-emerald-600' : prontoId === os.id ? 'text-white bg-fpv-600' : 'text-stone-400 hover:text-fpv-600 hover:bg-fpv-50'}`}>
                         {compartilhandoId === os.id ? <Loader2 size={16} className="animate-spin" /> : <Share2 size={16} />}
                       </button>
-                      {(compartilhandoId === os.id || prontoId === os.id) && progShare && (
+                      {(compartilhandoId === os.id || prontoId === os.id || faltamId === os.id) && progShare && (
                         <span className="self-center text-[10px] font-bold text-fpv-700 whitespace-nowrap">{progShare}</span>
                       )}
                       <button onClick={() => aoEditar(os)} title="Editar"
