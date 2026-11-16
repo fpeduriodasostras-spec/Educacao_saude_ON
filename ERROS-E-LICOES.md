@@ -69,6 +69,15 @@ método AIOS: erro numerado nunca volta.
   recusa MAIS de 10),
   tenta de novo na hora com o lote menor e manda o resto num botão "ENVIAR AS
   OUTRAS" (toque novo). Quem aceita tudo segue mandando tudo de uma vez.
+- **#29 App instalado pelo Samsung Internet fica "desenquadrado".** Instalado
+  pelo navegador da Samsung (e não pelo Chrome), o app é desenhado por baixo
+  da barra do relógio e da barra de botões do Android: topo e rodapé cortados
+  (caso Neilson, 16/11). v129: só no Samsung Internet liga
+  `viewport-fit=cover` e dá margem `env(safe-area-inset-top/bottom)` ao
+  topo, ao rodapé e à folga do conteúdo (classes fpv-topo/fpv-rodape/
+  fpv-corpo + html.samsung no index.html). Sem barra (valor 0), a conta dá
+  exatamente o espaço de antes — Chrome e iPhone não mudam nada. Para saber
+  o navegador de alguém: o user-agent no log do kong traz "SamsungBrowser/xx".
 
 ## Supabase / dados
 

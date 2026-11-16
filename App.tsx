@@ -184,7 +184,7 @@ const App: React.FC = () => {
   );
 
   return (
-    <div className="min-h-screen pb-24">
+    <div className="min-h-screen pb-24 fpv-corpo">
       {/* v123: LOGIN VENCIDO — abre por cima, sem desmontar nada por baixo */}
       {!sessao && (
         <div className="fixed inset-0 z-50 bg-stone-900/70 overflow-y-auto print-hidden">
@@ -196,7 +196,9 @@ const App: React.FC = () => {
           <LoginScreen />
         </div>
       )}
-      <header className="bg-white border-b border-stone-200 px-4 py-3 flex items-center gap-3 sticky top-0 z-20 print-hidden">
+      {/* v129: fpv-topo / fpv-rodape / fpv-corpo = margem das barras do celular
+          no Samsung Internet (index.html). Nos outros navegadores não fazem nada. */}
+      <header className="bg-white border-b border-stone-200 px-4 py-3 flex items-center gap-3 sticky top-0 z-20 print-hidden fpv-topo">
         <div className="w-9 h-9 rounded-lg bg-fpv-500 text-white flex items-center justify-center font-bold text-xs">FPV</div>
         <div className="flex-1 leading-tight">
           <div className="font-bold text-stone-900 text-sm">FPV Campo</div>
@@ -293,7 +295,7 @@ const App: React.FC = () => {
         {aba === 'fechamento' && !soAlmox && !equipe && <FechamentoSemanal lista={lista} />}
       </main>
 
-      <nav className="fixed bottom-0 left-0 right-0 z-30 bg-white border-t border-stone-200 px-4 py-2 print-hidden">
+      <nav className="fixed bottom-0 left-0 right-0 z-30 bg-white border-t border-stone-200 px-4 py-2 print-hidden fpv-rodape">
         <div className="max-w-3xl mx-auto flex gap-1">
           {/* rótulos de AÇÃO em linguagem direta (auditoria 07/07, foco
               baixa escolaridade) — o pictograma é o ícone, sem emoji dobrado */}

@@ -3,6 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- v129 — CASO NEILSON (16/11): app instalado pelo SAMSUNG INTERNET (não
+         pelo Chrome) é desenhado por baixo da barra do relógio e da barra de
+         botões do Android — o topo e o rodapé do app ficam "desenquadrados".
+         Só no Samsung Internet: liga viewport-fit=cover (o navegador passa a
+         informar o tamanho dessas barras) e a classe "samsung", que dá a margem
+         certa no topo e no rodapé (CSS abaixo). Chrome/iPhone: nada muda. -->
+    <script>
+      (function () {
+        try {
+          if (/SamsungBrowser/i.test(navigator.userAgent)) {
+            document.documentElement.classList.add('samsung');
+            var m = document.querySelector('meta[name="viewport"]');
+            if (m && !/viewport-fit/.test(m.content)) m.content = m.content + ', viewport-fit=cover';
+          }
+        } catch (e) { /* sem ajuste: app segue normal */ }
+      })();
+    </script>
     <meta name="theme-color" content="#0F6E56" />
     <title>FPV Campo · F.P. Vieira Engenharia</title>
     <!-- PWA: instalar no Android/iPhone como app (v48). O service worker
@@ -41,6 +58,17 @@
     </script>
     <style>
       body { background-color: #F4F6F3; }
+      /* v129 — margens das barras do celular, SÓ no Samsung Internet (ver o
+         script lá em cima). Com a barra de valor 0 (Chrome/iPhone, ou Samsung
+         que não desenha por baixo), as contas abaixo dão exatamente o que já
+         era: topo 0.75rem, rodapé 0.5rem, folga do conteúdo 6rem. A faixa do
+         relógio ganha o verde do app, para os ícones brancos aparecerem. */
+      html.samsung .fpv-topo {
+        padding-top: calc(0.75rem + env(safe-area-inset-top, 0px));
+        background: linear-gradient(to bottom, #0F6E56 env(safe-area-inset-top, 0px), #ffffff env(safe-area-inset-top, 0px));
+      }
+      html.samsung .fpv-rodape { padding-bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px)); }
+      html.samsung .fpv-corpo { padding-bottom: calc(6rem + env(safe-area-inset-bottom, 0px)); }
       @media print {
         body * { visibility: hidden; }
         #folha-print, #folha-print * { visibility: visible; }
